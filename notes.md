@@ -8,7 +8,7 @@ what is missing:
 - store as tmp file + move
 - ima policies/verification
 - (target_cache_dir, 0700)
-- 
+- missing `/hdr-debuginfo` (http response headers)
 
 cp /work/zig-out/lib/libdebuginfo.so.1.0.192 /usr/lib64/libdebuginfod.so.1
 gdb -ex 'set debuginfod enabled on' -ex 'set debuginfod urls https://debuginfod.debian.net' -ex 'set debuginfod verbose 1' -q -ex 'file /bin/bash'

@@ -110,8 +110,7 @@ export fn debuginfod_find_source(
     };
     defer ctx.allocator.free(build_id_casted);
 
-    const source_path_casted: []const u8 = std.mem.span(source_path);
-
+    const source_path_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(source_path)));
     const local_path = ctx.findSource(build_id_casted, source_path_casted, ctx.urls[0]) catch |err| {
         std.log.err("findSource err: {}", .{err});
         return -1;
@@ -141,6 +140,7 @@ export fn debuginfod_find_section(
     section: [*c]const c_char,
     path_out_c: [*c][*c]c_char,
 ) c_int {
+    comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
     const ctx = handle orelse return -1;
 
     const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
@@ -149,7 +149,7 @@ export fn debuginfod_find_section(
     };
     defer ctx.allocator.free(build_id_casted);
 
-    const section_casted: []const u8 = std.mem.span(section);
+    const section_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(section)));
     const local_path = ctx.findSection(build_id_casted, section_casted, ctx.urls[0]) catch |err| {
         std.log.err("findSection err: {}", .{err});
         return -1;
@@ -207,8 +207,8 @@ export fn debuginfod_add_http_header(
     header: [*c]const c_char,
 ) c_int {
     const ctx = handle orelse return -1;
-    _ = ctx;
-    const header_casted: []const u8 = std.mem.span(header);
+
+    const header_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(header)));
     const colon_idx = std.mem.indexOf(u8, header_casted, ": ") orelse {
         return -1;
     };
@@ -217,6 +217,7 @@ export fn debuginfod_add_http_header(
         .value = header_casted[colon_idx+2..],
     };
     _ = out;
+    _ = ctx;
     // todo: append header
 
     return 0;

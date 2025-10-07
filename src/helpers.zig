@@ -70,6 +70,7 @@ pub fn fetchAsFile(base_allocator: std.mem.Allocator, full_url: []const u8, loca
     if (resp.status != .ok) {
         return error.InvalidStatusCode;
     }
+    // TODO: tmpfile / movefile
 }
 
 // test "fetch ubuntu base tarball and save to file" {
