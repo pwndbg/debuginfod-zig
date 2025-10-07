@@ -73,25 +73,25 @@ pub fn fetchAsFile(base_allocator: std.mem.Allocator, full_url: []const u8, loca
     // TODO: tmpfile / movefile
 }
 
-// test "fetch ubuntu base tarball and save to file" {
-//     const allocator = std.testing.allocator;
-//
-//     // const url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.raw";
-//     const url = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz";
-//     const out_path = "ubuntu-base.tar.gz";
-//
-//     defer std.fs.cwd().deleteFile(out_path) catch {};
-//
-//     try fetchAsFile(allocator, url, out_path);
-//
-//     var file = try std.fs.cwd().openFile(out_path, .{});
-//     defer file.close();
-//
-//     const size = try file.getEndPos();
-//     try std.testing.expect(size > 10 * 1024); // > 10 KB
-//
-//     std.debug.print("Pobrano {d} bajtów do {s}\n", .{ size, out_path });
-// }
+test "fetch ubuntu base tarball and save to file" {
+    const allocator = std.testing.allocator;
+
+    // const url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.raw";
+    const url = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz";
+    const out_path = "ubuntu-base.tar.gz";
+
+    defer std.fs.cwd().deleteFile(out_path) catch {};
+
+    try fetchAsFile(allocator, url, out_path);
+
+    var file = try std.fs.cwd().openFile(out_path, .{});
+    defer file.close();
+
+    const size = try file.getEndPos();
+    try std.testing.expect(size > 10 * 1024); // > 10 KB
+
+    std.debug.print("Pobrano {d} bajtów do {s}\n", .{ size, out_path });
+}
 
 pub fn toCString(allocator: std.mem.Allocator, s: []const u8) ![:0]u8 {
     const dup = try allocator.allocSentinel(u8, s.len, 0);
@@ -166,4 +166,11 @@ test "urlencode" {
     defer allocator.free(out);
 
     try std.testing.expectEqualStrings("%2Froot%2Ffoo.c", out);
+}
+
+pub fn fileExists(path: []u8) bool {
+    std.fs.cwd().access(path, .{}) catch {
+        return false;
+    };
+    return true;
 }

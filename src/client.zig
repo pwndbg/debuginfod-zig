@@ -44,12 +44,12 @@ fn getCachePath(allocator: std.mem.Allocator) ![]const u8 {
 
     const xdg_cache_env = std.posix.getenv("XDG_CACHE_HOME");
     if (xdg_cache_env) |cache_path| {
-        return try std.fmt.allocPrint(allocator, "{s}/debuginfod_client/", .{cache_path});
+        return try std.fs.path.join(allocator, &.{cache_path, "debuginfod_client"});
     }
 
     const home_env = std.posix.getenv("HOME");
     if (home_env) |cache_path| {
-        return try std.fmt.allocPrint(allocator, "{s}/.cache/debuginfod_client/", .{cache_path});
+        return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
     }
 
     return error.EmptyCachePathEnv;
@@ -122,12 +122,14 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findDebuginfo(self: *DebuginfodContext, build_id: []u8, url: []const u8) ![]u8 {
-        std.log.err("findDebuginfo {s} {s}", .{url, build_id});
+        std.log.info("findDebuginfo {s} {s}", .{url, build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, "debuginfo"});
         errdefer self.allocator.free(local_path);  // caller must free
 
-        // todo: first fetch from disk
+        if(helpers.fileExists(local_path)) {
+            return local_path;
+        }
 
         const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/debuginfo", .{url, build_id});
         defer self.allocator.free(full_url);
@@ -137,12 +139,14 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findExecutable(self: *DebuginfodContext, build_id: []u8, url: []const u8) ![]u8 {
-        std.log.err("findExecutable {s} {s}", .{url, build_id});
+        std.log.info("findExecutable {s} {s}", .{url, build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, "executable"});
         errdefer self.allocator.free(local_path);  // caller must free
 
-        // todo: first fetch from disk
+        if(helpers.fileExists(local_path)) {
+            return local_path;
+        }
 
         const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/executable", .{url, build_id});
         defer self.allocator.free(full_url);
@@ -152,7 +156,7 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findSource(self: *DebuginfodContext, build_id: []u8, source_path: []const u8, url: []const u8) ![]u8 {
-        std.log.err("findSource {s} {s} {s}", .{url, build_id, source_path});
+        std.log.info("findSource {s} {s} {s}", .{url, build_id, source_path});
 
         const source_path_encoded = try helpers.urlencodePart(self.allocator, source_path);
         defer self.allocator.free(source_path_encoded);
@@ -166,7 +170,9 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, cache_part});
         errdefer self.allocator.free(local_path);  // caller must free
 
-        // todo: first fetch from disk
+        if(helpers.fileExists(local_path)) {
+            return local_path;
+        }
 
         const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/source/{s}", .{url, build_id, source_path_encoded});
         defer self.allocator.free(full_url);
@@ -176,7 +182,7 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findSection(self: *DebuginfodContext, build_id: []u8, section: []const u8, url: []const u8) ![]u8 {
-        std.log.err("findSection {s} {s} {s}", .{url, build_id, section});
+        std.log.info("findSection {s} {s} {s}", .{url, build_id, section});
 
         const section_escaped = try helpers.escapeFilename(self.allocator, section);
         defer self.allocator.free(section_escaped);
@@ -187,7 +193,9 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, cache_part});
         errdefer self.allocator.free(local_path);  // caller must free
 
-        // todo: first fetch from disk
+        if(helpers.fileExists(local_path)) {
+            return local_path;
+        }
 
         const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/section/{s}", .{url, build_id, section});
         defer self.allocator.free(full_url);

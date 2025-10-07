@@ -7,7 +7,7 @@ pub const std_options: std.Options = .{
 };
 
 export fn debuginfod_begin() ?*client.DebuginfodContext {
-    std.log.err("debuginfod_begin enter", .{});
+    std.log.info("debuginfod_begin enter", .{});
 
     const ctx = client.DebuginfodContext.init(std.heap.c_allocator) catch |err| {
         std.log.err("debuginfod_begin init err: {}", .{err});
@@ -17,7 +17,7 @@ export fn debuginfod_begin() ?*client.DebuginfodContext {
 }
 
 export fn debuginfod_end(handle: ?*client.DebuginfodContext) void {
-    std.log.err("debuginfod_end enter", .{});
+    std.log.info("debuginfod_end enter", .{});
 
     const ctx = handle orelse return;
     defer ctx.deinit();
