@@ -39,19 +39,13 @@ test "build_id_to_hex works for raw bytes input" {
 }
 
 pub fn fetchAsFile(base_allocator: std.mem.Allocator, full_url: []const u8, local_path: []const u8) !void {
-    // #define DEBUGINFOD_URLS_ENV_VAR "DEBUGINFOD_URLS"
-    // #define DEBUGINFOD_CACHE_PATH_ENV_VAR "DEBUGINFOD_CACHE_PATH"
-    // todo: #define DEBUGINFOD_TIMEOUT_ENV_VAR "DEBUGINFOD_TIMEOUT"
-    // todo: #define DEBUGINFOD_PROGRESS_ENV_VAR "DEBUGINFOD_PROGRESS"
-    // #define DEBUGINFOD_VERBOSE_ENV_VAR "DEBUGINFOD_VERBOSE"
-    // todo: #define DEBUGINFOD_RETRY_LIMIT_ENV_VAR "DEBUGINFOD_RETRY_LIMIT"
-    // todo: #define DEBUGINFOD_MAXSIZE_ENV_VAR "DEBUGINFOD_MAXSIZE"
-    // todo: #define DEBUGINFOD_MAXTIME_ENV_VAR "DEBUGINFOD_MAXTIME"
-    // todo: #define DEBUGINFOD_HEADERS_FILE_ENV_VAR "DEBUGINFOD_HEADERS_FILE"
-    // #define DEBUGINFOD_IMA_CERT_PATH_ENV_VAR "DEBUGINFOD_IMA_CERT_PATH"
     var arena = std.heap.ArenaAllocator.init(base_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+
+    if (std.fs.path.dirname(local_path)) |dirname| {
+        try std.fs.cwd().makePath(dirname);
+    }
 
     var file = try std.fs.cwd().createFile(local_path, .{
         .truncate = true,
@@ -78,28 +72,93 @@ pub fn fetchAsFile(base_allocator: std.mem.Allocator, full_url: []const u8, loca
     }
 }
 
-test "fetch ubuntu base tarball and save to file" {
-    const allocator = std.testing.allocator;
-
-    // const url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.raw";
-    const url = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz";
-    const out_path = "ubuntu-base.tar.gz";
-
-    defer std.fs.cwd().deleteFile(out_path) catch {};
-
-    try fetchAsFile(allocator, url, out_path);
-
-    var file = try std.fs.cwd().openFile(out_path, .{});
-    defer file.close();
-
-    const size = try file.getEndPos();
-    try std.testing.expect(size > 10 * 1024); // > 10 KB
-
-    std.debug.print("Pobrano {d} bajtów do {s}\n", .{ size, out_path });
-}
+// test "fetch ubuntu base tarball and save to file" {
+//     const allocator = std.testing.allocator;
+//
+//     // const url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.raw";
+//     const url = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz";
+//     const out_path = "ubuntu-base.tar.gz";
+//
+//     defer std.fs.cwd().deleteFile(out_path) catch {};
+//
+//     try fetchAsFile(allocator, url, out_path);
+//
+//     var file = try std.fs.cwd().openFile(out_path, .{});
+//     defer file.close();
+//
+//     const size = try file.getEndPos();
+//     try std.testing.expect(size > 10 * 1024); // > 10 KB
+//
+//     std.debug.print("Pobrano {d} bajtów do {s}\n", .{ size, out_path });
+// }
 
 pub fn toCString(allocator: std.mem.Allocator, s: []const u8) ![:0]u8 {
     const dup = try allocator.allocSentinel(u8, s.len, 0);
     @memcpy(dup, s);
     return dup;
+}
+
+pub fn escapeFilename(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
+    const prefix_size = "DEADBEEF-".len;
+    var dest_len = src.len + prefix_size;
+    const max_dest_len = std.fs.max_name_bytes / 2;
+    if (dest_len > max_dest_len)
+        dest_len = max_dest_len;
+
+    var dest = try allocator.alloc(u8, dest_len);
+    var wi: usize = dest_len - 1;
+    var ri: usize = src.len - 1;
+
+    while (true) {
+        dest[wi] = switch (src[ri]) {
+            'A'...'Z', 'a'...'z', '0'...'9', '.', '-', '_' => src[ri],
+            else => '#',
+        };
+        if(ri == 0 or wi == 0) {
+            break;
+        }
+        wi -= 1;
+        ri -= 1;
+    }
+
+    // hash djb2 (DJBX33A)
+    var hash: u32 = 5381;
+    for (src) |ch| {
+        hash = ((hash << 5) +% hash) +% ch;
+    }
+
+    _ = try std.fmt.bufPrint(dest[0..8], "{X:0<8}", .{hash});
+    dest[8] = '-';
+    return dest;
+}
+
+test "escape" {
+    const allocator = std.testing.allocator;
+
+    const out = try escapeFilename(allocator, "/root/foo.c");
+    defer allocator.free(out);
+    try std.testing.expectEqualStrings("7D1E797C-#root#foo.c", out);
+
+    const out2 = try escapeFilename(allocator, "/root/too-long-name-aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh-iiii-jjjj/kkkk/llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-wwww-uuuu-vvvv-xxxx-zzzz-0000-1111-2222-3333-4444-5555-6666-7777-8888.c");
+    defer allocator.free(out2);
+    try std.testing.expectEqualStrings("8B26663B-k#llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-wwww-uuuu-vvvv-xxxx-zzzz-0000-1111-2222-3333-4444-5555-6666-7777-8888.c", out2);
+}
+
+pub fn urlencodePart(allocator: std.mem.Allocator, part: []const u8) ![]u8 {
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, part.len);
+    defer aw.deinit();
+
+    const f = std.Uri.Component{ .raw = part };
+    try f.formatUser(&aw.writer);
+
+    return try aw.toOwnedSlice();
+}
+
+test "urlencode" {
+    const allocator = std.testing.allocator;
+
+    const out = try urlencodePart(allocator, "/root/foo.c");
+    defer allocator.free(out);
+
+    try std.testing.expectEqualStrings("%2Froot%2Ffoo.c", out);
 }

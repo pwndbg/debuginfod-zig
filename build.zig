@@ -58,25 +58,8 @@ pub fn build(b: *std.Build) void {
             .minor = 0,
             .patch = 192,
         },
-        .use_lld = true,
-        .use_llvm = true,
     });
-    lib.setVersionScript(b.path("libdebuginfod.map"));
-    // /usr/lib/aarch64-linux-gnu/libdebuginfod.so.1
-    // /usr/lib/aarch64-linux-gnu/libdebuginfod-0.192.so
-    // Version definitions:
-    // 1 0x01 0x0c073091 libdebuginfod.so.1
-    // 2 0x02 0x0a8ab990 ELFUTILS_0
-    // 3 0x00 0x09999e18 ELFUTILS_0.178
-    //                   ELFUTILS_0
-    // 4 0x00 0x09999e19 ELFUTILS_0.179
-    //                   ELFUTILS_0.178
-    // 5 0x00 0x09999e03 ELFUTILS_0.183
-    //                   ELFUTILS_0.179
-    // 6 0x00 0x09999e08 ELFUTILS_0.188
-    //                   ELFUTILS_0.183
-    // 7 0x00 0x09999e72 ELFUTILS_0.192
-    //                   ELFUTILS_0.188
+    lib.setVersionScript(b.path("version.map"));
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when

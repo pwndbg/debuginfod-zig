@@ -79,7 +79,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
-        "libdebuginfod.map",
+        "version.map",
         // For example...
         //"LICENSE",
         //"README.md",
