@@ -99,7 +99,7 @@ pub fn toCString(allocator: std.mem.Allocator, s: []const u8) ![:0]u8 {
 }
 
 pub fn escapeFilename(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
-    const prefix_size = "DEADBEEF-".len;
+    const prefix_size = "deadbeef-".len;
     var dest_len = src.len + prefix_size;
     const max_dest_len = std.fs.max_name_bytes / 2;
     if (dest_len > max_dest_len)
@@ -127,7 +127,7 @@ pub fn escapeFilename(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
         hash = ((hash << 5) +% hash) +% ch;
     }
 
-    _ = try std.fmt.bufPrint(dest[0..8], "{X:0<8}", .{hash});
+    _ = try std.fmt.bufPrint(dest[0..8], "{x:0<8}", .{hash});
     dest[8] = '-';
     return dest;
 }
@@ -137,11 +137,15 @@ test "escape" {
 
     const out = try escapeFilename(allocator, "/root/foo.c");
     defer allocator.free(out);
-    try std.testing.expectEqualStrings("7D1E797C-#root#foo.c", out);
+    try std.testing.expectEqualStrings("7d1e797c-#root#foo.c", out);
+
+    const out3 = try escapeFilename(allocator, "/usr/src/debug/bash-5.3.0-2.fc43.aarch64/shell.c");
+    defer allocator.free(out3);
+    try std.testing.expectEqualStrings("8612e4f5-#usr#src#debug#bash-5.3.0-2.fc43.aarch64#shell.c", out3);
 
     const out2 = try escapeFilename(allocator, "/root/too-long-name-aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh-iiii-jjjj/kkkk/llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-wwww-uuuu-vvvv-xxxx-zzzz-0000-1111-2222-3333-4444-5555-6666-7777-8888.c");
     defer allocator.free(out2);
-    try std.testing.expectEqualStrings("8B26663B-k#llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-wwww-uuuu-vvvv-xxxx-zzzz-0000-1111-2222-3333-4444-5555-6666-7777-8888.c", out2);
+    try std.testing.expectEqualStrings("8b26663b-k#llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-wwww-uuuu-vvvv-xxxx-zzzz-0000-1111-2222-3333-4444-5555-6666-7777-8888.c", out2);
 }
 
 pub fn urlencodePart(allocator: std.mem.Allocator, part: []const u8) ![]u8 {
