@@ -80,8 +80,7 @@
         "build.zig.zon",
         "src",
         "version.map",
-        // For example...
-        //"LICENSE",
-        //"README.md",
+        "LICENSE",
+        "README.md",
     },
 }
