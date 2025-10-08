@@ -328,6 +328,7 @@ pub const DebuginfodContext = struct {
         const redirect_buffer: []u8 = try client.allocator.alloc(u8, 8 * 1024);
         defer client.allocator.free(redirect_buffer);
 
+        // TODO: connect timeout? setsocketopt
         var req = try client.request( .GET, try std.Uri.parse(url), .{
             .redirect_behavior = @enumFromInt(3),
             .keep_alive = true,
@@ -354,11 +355,15 @@ pub const DebuginfodContext = struct {
         self.current_response_headers = &response_headers;
         defer self.current_response_headers = null;
 
-        var file_size: usize = 0;  // default unknown size
+        var file_size: ?usize = null;
         if(response_headers.size) |size| {
             file_size = size;
         } else if(response.head.content_encoding == .identity and response.head.content_length != null) {
             file_size = response.head.content_length.?;
+        }
+
+        if(self.envs.fetch_maxsize != null and file_size != null and self.envs.fetch_maxsize.? < file_size.?) {
+            return error.DownloadMaxSizeExceed;
         }
 
         const decompress_buffer: []u8 = switch (response.head.content_encoding) {
@@ -374,6 +379,8 @@ pub const DebuginfodContext = struct {
         const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
 
         var current_writed_bytes: usize = 0;
+        const writer_start_at = std.time.timestamp();
+
         while (true) {
             current_writed_bytes += reader.stream(response_writer, .unlimited) catch |err| switch (err) {
                 error.EndOfStream => break,
@@ -381,17 +388,26 @@ pub const DebuginfodContext = struct {
                 else => |e| return e,
             };
 
+            if(self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
+                return error.DownloadMaxSizeExceed;
+            }
+            if(self.envs.fetch_maxtime) |maxtime| {
+                const diff = std.time.timestamp() - writer_start_at;
+                if(diff < 0) return error.YourClockIsShaking;
+                if(diff > maxtime) return error.DownloadMaxTimeExceed;
+            }
+
             // todo: show progress on every 64kb?
             self.onFetchProgress(current_writed_bytes, file_size);
         }
     }
 
-    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: usize) void {
+    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) void {
         // std.log.info("onFetchProgress {d}/{d}", .{current, total});
 
         if(self.progress_fn) |callback| {
             // todo: handle response from callback? what this response is doing?
-            _ = callback(self, @intCast(current), @intCast(total));
+            _ = callback(self, @intCast(current), @intCast(total orelse 0));
         }
     }
 
