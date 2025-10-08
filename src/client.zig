@@ -58,10 +58,9 @@ pub const DebuginfodEnvs = struct {
     fn getUrls(allocator: std.mem.Allocator) ![][]const u8 {
         var list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
 
-        const urls_env = std.posix.getenv("DEBUGINFOD_URLS");
-        if (urls_env) |urls_val| {
+        if (std.posix.getenv("DEBUGINFOD_URLS")) |val| {
             // Split by spaces
-            var it = std.mem.tokenizeAny(u8, urls_val, " ");
+            var it = std.mem.tokenizeAny(u8, val, " ");
             while (it.next()) |url| {
                 if (url.len == 0) continue;
                 // fixme: url is dangling pointer?
@@ -76,21 +75,15 @@ pub const DebuginfodEnvs = struct {
     }
 
     fn getCachePath(allocator: std.mem.Allocator) ![]const u8 {
-        const cache_path_env = std.posix.getenv("DEBUGINFOD_CACHE_PATH");
-        if (cache_path_env) |cache_path| {
+        if (std.posix.getenv("DEBUGINFOD_CACHE_PATH")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path});
         }
-
-        const xdg_cache_env = std.posix.getenv("XDG_CACHE_HOME");
-        if (xdg_cache_env) |cache_path| {
+        if (std.posix.getenv("XDG_CACHE_HOME")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path, "debuginfod_client"});
         }
-
-        const home_env = std.posix.getenv("HOME");
-        if (home_env) |cache_path| {
+        if (std.posix.getenv("HOME")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
         }
-
         return error.EmptyCachePathEnv;
     }
 };
