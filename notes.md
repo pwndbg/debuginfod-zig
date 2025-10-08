@@ -10,8 +10,11 @@ what is missing:
 - (target_cache_dir, 0700)
 - missing `/hdr-debuginfo` (http response headers)
 
+find /usr -name '*libdebuginfo*'
 cp /work/zig-out/lib/libdebuginfo.so.1.0.192 /usr/lib64/libdebuginfod.so.1
+cp /work/zig-out/lib/libdebuginfo.so.1.0.192 /usr/lib/aarch64-linux-gnu/libdebuginfod.so.1
 gdb -ex 'set debuginfod enabled on' -ex 'set debuginfod urls https://debuginfod.debian.net' -ex 'set debuginfod verbose 1' -q -ex 'file /bin/bash'
+gdb -ex 'set debuginfod enabled on' -ex 'set debuginfod urls https://debuginfod.fedoraproject.org' -ex 'set debuginfod verbose 1' -q -ex 'file /bin/bash'
 
 https://debuginfod.fedoraproject.org/buildid/66cd4a67b80dfe2c59b7cfdccb4cb31c34cbc7a3/source/usr%2fsrc%2fdebug%2fbash-5.3.0-2.fc43.aarch64%2fshell.c
 

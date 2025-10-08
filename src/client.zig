@@ -1,76 +1,157 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 
-pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) c_int;
+pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
 pub const FindCallbackFnType = fn(handle: *DebuginfodContext, build_id: []u8, url: []const u8) anyerror![]u8;
 
-// envs:
-// done #define DEBUGINFOD_URLS_ENV_VAR "DEBUGINFOD_URLS"
-// done #define DEBUGINFOD_CACHE_PATH_ENV_VAR "DEBUGINFOD_CACHE_PATH"
-// todo: #define DEBUGINFOD_TIMEOUT_ENV_VAR "DEBUGINFOD_TIMEOUT"
-// todo: #define DEBUGINFOD_PROGRESS_ENV_VAR "DEBUGINFOD_PROGRESS"
-// todo: #define DEBUGINFOD_VERBOSE_ENV_VAR "DEBUGINFOD_VERBOSE"
-// todo: #define DEBUGINFOD_RETRY_LIMIT_ENV_VAR "DEBUGINFOD_RETRY_LIMIT"
-// todo: #define DEBUGINFOD_MAXSIZE_ENV_VAR "DEBUGINFOD_MAXSIZE"
-// todo: #define DEBUGINFOD_MAXTIME_ENV_VAR "DEBUGINFOD_MAXTIME"
-// todo: #define DEBUGINFOD_HEADERS_FILE_ENV_VAR "DEBUGINFOD_HEADERS_FILE"
-// todo: #define DEBUGINFOD_IMA_CERT_PATH_ENV_VAR "DEBUGINFOD_IMA_CERT_PATH"
+pub const DebuginfodEnvs = struct {
+    // required
+    urls: [][]const u8 = &.{},
+    cache_path: []const u8 = &[_]u8{},
 
-fn getUrls(allocator: std.mem.Allocator) ![][]const u8 {
-    var list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    // optional
+    fetch_timeout: ?usize = null,
+    fetch_maxsize: ?usize = null,
+    fetch_maxtime: ?usize = null,
+    fetch_retry_limit: usize = 2,
+    fetch_progress_to_stderr: bool = false,
+    fetch_headers: []const std.http.Header = &.{},
+    verbose_to_stderr: bool = false,
 
-    const urls_env = std.posix.getenv("DEBUGINFOD_URLS");
-    if (urls_env) |urls_val| {
-        // Split by spaces
-        var it = std.mem.tokenizeAny(u8, urls_val, " ");
-        while (it.next()) |url| {
-            if (url.len == 0) continue;
-            // fixme: url is dangling pointer?
-            try list.append(allocator, url);
+    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator) !void {
+        self.urls = try getUrls(allocator);
+        self.cache_path = try getCachePath(allocator);
+        // self.fetch_headers = try getHeadersFromFile(allocator);
+
+        if(std.posix.getenv("DEBUGINFOD_TIMEOUT")) |val| {
+            self.fetch_timeout = try std.fmt.parseInt(usize, val, 10);
+        }
+        if(std.posix.getenv("DEBUGINFOD_MAXTIME")) |val| {
+            self.fetch_maxtime = try std.fmt.parseInt(usize, val, 10);
+        }
+        if(std.posix.getenv("DEBUGINFOD_MAXSIZE")) |val| {
+            self.fetch_maxsize = try std.fmt.parseInt(usize, val, 10);
+        }
+        if(std.posix.getenv("DEBUGINFOD_RETRY_LIMIT")) |val| {
+            self.fetch_retry_limit = try std.fmt.parseInt(usize, val, 10);
+        }
+        if(std.posix.getenv("DEBUGINFOD_PROGRESS") != null) {
+            self.fetch_progress_to_stderr = true;
+        }
+        if(std.posix.getenv("DEBUGINFOD_VERBOSE") != null) {
+            self.verbose_to_stderr = true;
         }
     }
-    if (list.items.len == 0) {
-        // TODO: default const
-        try list.append(allocator, "https://debuginfod.debian.net");
-    }
-    return try list.toOwnedSlice(allocator);
-}
 
-fn getCachePath(allocator: std.mem.Allocator) ![]const u8 {
-    const cache_path_env = std.posix.getenv("DEBUGINFOD_CACHE_PATH");
-    if (cache_path_env) |cache_path| {
-        return try allocator.dupe(u8, cache_path);
+    // fn getHeadersFromFile(allocator: std.mem.Allocator) ![]const std.http.Header {
+    //     const headers_file = std.posix.getenv("DEBUGINFOD_HEADERS_FILE") orelse return .{};
+    //     // TODO: implement
+    //
+    // }
+
+    // fn getImaCert(allocator: std.mem.Allocator) !void {
+    //     _ = allocator;
+    //     // const env8 = std.posix.getenv("DEBUGINFOD_IMA_CERT_PATH");
+    //     // TODO: implement
+    // }
+
+    fn getUrls(allocator: std.mem.Allocator) ![][]const u8 {
+        var list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+
+        const urls_env = std.posix.getenv("DEBUGINFOD_URLS");
+        if (urls_env) |urls_val| {
+            // Split by spaces
+            var it = std.mem.tokenizeAny(u8, urls_val, " ");
+            while (it.next()) |url| {
+                if (url.len == 0) continue;
+                // fixme: url is dangling pointer?
+                try list.append(allocator, url);
+            }
+        }
+        if (list.items.len == 0) {
+            // TODO: default const
+            try list.append(allocator, "https://debuginfod.debian.net");
+        }
+        return try list.toOwnedSlice(allocator);
     }
 
-    const xdg_cache_env = std.posix.getenv("XDG_CACHE_HOME");
-    if (xdg_cache_env) |cache_path| {
-        return try std.fs.path.join(allocator, &.{cache_path, "debuginfod_client"});
+    fn getCachePath(allocator: std.mem.Allocator) ![]const u8 {
+        const cache_path_env = std.posix.getenv("DEBUGINFOD_CACHE_PATH");
+        if (cache_path_env) |cache_path| {
+            return try std.fs.path.join(allocator, &.{cache_path});
+        }
+
+        const xdg_cache_env = std.posix.getenv("XDG_CACHE_HOME");
+        if (xdg_cache_env) |cache_path| {
+            return try std.fs.path.join(allocator, &.{cache_path, "debuginfod_client"});
+        }
+
+        const home_env = std.posix.getenv("HOME");
+        if (home_env) |cache_path| {
+            return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
+        }
+
+        return error.EmptyCachePathEnv;
+    }
+};
+
+pub const DebuginfodResponeHeaders = struct {
+    size: ?usize = null,
+    archive: ?[]const u8 = null,
+    file: ?[]const u8 = null,
+    imasignature: ?[]const u8 = null,
+
+    allocator: ?std.mem.Allocator = null,
+    _buffer: ?[:0]u8 = null,
+
+    pub fn deinit(self: *DebuginfodResponeHeaders) void {
+        const allocator = self.allocator orelse return;
+        if(self._buffer) |buf| {
+            allocator.free(buf);
+        }
+        self._buffer = null;
     }
 
-    const home_env = std.posix.getenv("HOME");
-    if (home_env) |cache_path| {
-        return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
-    }
+    pub fn toBinding(self: *DebuginfodResponeHeaders) ![:0]u8 {
+        const allocator = self.allocator orelse return error.AllocatorIsNotAssigned;
+        if(self._buffer) |buf| {
+            return buf;
+        }
 
-    return error.EmptyCachePathEnv;
-}
+        var list = try std.ArrayList(u8).initCapacity(allocator, 0);
+        if(self.size) |val| {
+            try list.print(allocator, "x-debuginfod-size: {d}\n", .{val});
+        }
+        if(self.archive) |val| {
+            try list.print(allocator, "x-debuginfod-archive: {s}\n", .{val});
+        }
+        if(self.file) |val| {
+            try list.print(allocator, "x-debuginfod-file: {s}\n", .{val});
+        }
+        if(self.imasignature) |val| {
+            try list.print(allocator, "x-debuginfod-imasignature: {s}\n", .{val});
+        }
+        if(list.items.len == 0) {
+            return error.NoHeaders;
+        }
+        const output = try list.toOwnedSliceSentinel(allocator, 0);
+        self._buffer = output;
+        return output;
+    }
+};
 
 pub const DebuginfodContext = struct {
     arena: *std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    // "static" envs
-    urls: [][]const u8,
-    cache_path: []const u8,
-
-    // "dynamic" options
-    fetch_arena: *std.heap.ArenaAllocator,
-    fetch_allocator: std.mem.Allocator,
-    progress_fn: ?*ProgressFnType,
-    current_userdata: ?*anyopaque,
-    current_url: ?[]const u8,
+    envs: DebuginfodEnvs,
     add_headers: []const std.http.Header,
-    last_headers: []const std.http.Header,
+    progress_fn: ?*ProgressFnType,
+
+    // variables accessable only in `onFetchProgress`
+    current_userdata: ?*anyopaque,
+    current_url: ?[:0]const u8,
+    current_response_headers: ?*DebuginfodResponeHeaders,
 
     pub fn init(base_allocator: std.mem.Allocator) !*DebuginfodContext {
         const arena = try base_allocator.create(std.heap.ArenaAllocator);
@@ -79,23 +160,18 @@ pub const DebuginfodContext = struct {
         errdefer arena.deinit();
         const allocator = arena.allocator();
 
-        const fetch_arena = try allocator.create(std.heap.ArenaAllocator);
-        fetch_arena.* = std.heap.ArenaAllocator.init(allocator);
-        const fetch_allocator = fetch_arena.allocator();
-
         const ctx = try allocator.create(DebuginfodContext);
         ctx.arena = arena;
         ctx.allocator = allocator;
-        ctx.urls = try getUrls(allocator);
-        ctx.cache_path = try getCachePath(allocator);
+        ctx.envs = .{};
+        try DebuginfodEnvs.init(&ctx.envs, allocator);
 
-        ctx.fetch_arena = fetch_arena;
-        ctx.fetch_allocator = fetch_allocator;
+        ctx.add_headers = &[_] std.http.Header{};
         ctx.progress_fn = null;
+
         ctx.current_userdata = null;
         ctx.current_url = null;
-        ctx.add_headers = &[_] std.http.Header{};
-        ctx.last_headers = &[_] std.http.Header{};
+        ctx.current_response_headers = null;
         return ctx;
     }
 
@@ -106,57 +182,42 @@ pub const DebuginfodContext = struct {
         self.* = undefined;
     }
 
-    pub fn retryAllUrls(self: *DebuginfodContext, build_id: []u8, comptime callback: FindCallbackFnType) ![]u8 {
-        _ = self.fetch_arena.reset(.free_all);
+    pub fn findDebuginfo(self: *DebuginfodContext, build_id: []u8) ![]u8 {
+        std.log.info("findDebuginfo {s}", .{build_id});
 
-        var lastError: anyerror = error.NotFound;
-        for (self.urls) |url| {
-            self.current_url = url;
-            const local_path = callback(self, build_id, url) catch |err| {
-                lastError = err;
-                continue;
-            };
-            return local_path;
-        }
-        return lastError;
-    }
-
-    pub fn findDebuginfo(self: *DebuginfodContext, build_id: []u8, url: []const u8) ![]u8 {
-        std.log.info("findDebuginfo {s} {s}", .{url, build_id});
-
-        const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, "debuginfo"});
+        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "debuginfo"});
         errdefer self.allocator.free(local_path);  // caller must free
 
         if(helpers.fileExists(local_path)) {
             return local_path;
         }
 
-        const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/debuginfo", .{url, build_id});
-        defer self.allocator.free(full_url);
+        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/debuginfo", .{build_id});
+        defer self.allocator.free(url_path);
 
-        try helpers.fetchAsFile(self.allocator, full_url, local_path);
+        try self.fetchFullOptions(url_path, local_path);
         return local_path;
     }
 
-    pub fn findExecutable(self: *DebuginfodContext, build_id: []u8, url: []const u8) ![]u8 {
-        std.log.info("findExecutable {s} {s}", .{url, build_id});
+    pub fn findExecutable(self: *DebuginfodContext, build_id: []u8) ![]u8 {
+        std.log.info("findExecutable {s}", .{build_id});
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, "executable"});
+        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "executable"});
         errdefer self.allocator.free(local_path);  // caller must free
 
         if(helpers.fileExists(local_path)) {
             return local_path;
         }
 
-        const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/executable", .{url, build_id});
-        defer self.allocator.free(full_url);
+        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/executable", .{build_id});
+        defer self.allocator.free(url_path);
 
-        try helpers.fetchAsFile(self.allocator, full_url, local_path);
+        try self.fetchFullOptions( url_path, local_path);
         return local_path;
     }
 
-    pub fn findSource(self: *DebuginfodContext, build_id: []u8, source_path: []const u8, url: []const u8) ![]u8 {
-        std.log.info("findSource {s} {s} {s}", .{url, build_id, source_path});
+    pub fn findSource(self: *DebuginfodContext, build_id: []u8, source_path: []const u8) ![]u8 {
+        std.log.info("findSource {s} {s}", .{build_id, source_path});
 
         const source_path_encoded = try helpers.urlencodePart(self.allocator, source_path);
         defer self.allocator.free(source_path_encoded);
@@ -167,22 +228,22 @@ pub const DebuginfodContext = struct {
         const cache_part = try std.mem.concat(self.allocator, u8, &.{"source-", source_path_escaped});
         defer self.allocator.free(cache_part);
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, cache_part});
+        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, cache_part});
         errdefer self.allocator.free(local_path);  // caller must free
 
         if(helpers.fileExists(local_path)) {
             return local_path;
         }
 
-        const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/source/{s}", .{url, build_id, source_path_encoded});
-        defer self.allocator.free(full_url);
+        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/source/{s}", .{build_id, source_path_encoded});
+        defer self.allocator.free(url_path);
 
-        try helpers.fetchAsFile(self.allocator, full_url, local_path);
+        try self.fetchFullOptions( url_path, local_path);
         return local_path;
     }
 
-    pub fn findSection(self: *DebuginfodContext, build_id: []u8, section: []const u8, url: []const u8) ![]u8 {
-        std.log.info("findSection {s} {s} {s}", .{url, build_id, section});
+    pub fn findSection(self: *DebuginfodContext, build_id: []u8, section: []const u8) ![]u8 {
+        std.log.info("findSection {s} {s}", .{build_id, section});
 
         const section_escaped = try helpers.escapeFilename(self.allocator, section);
         defer self.allocator.free(section_escaped);
@@ -190,17 +251,171 @@ pub const DebuginfodContext = struct {
         const cache_part = try std.mem.concat(self.allocator, u8, &.{"section-", section_escaped});
         defer self.allocator.free(cache_part);
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.cache_path, build_id, cache_part});
+        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, cache_part});
         errdefer self.allocator.free(local_path);  // caller must free
 
         if(helpers.fileExists(local_path)) {
             return local_path;
         }
 
-        const full_url = try std.fmt.allocPrint(self.allocator, "{s}/buildid/{s}/section/{s}", .{url, build_id, section});
-        defer self.allocator.free(full_url);
+        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/section/{s}", .{build_id, section});
+        defer self.allocator.free(url_path);
 
-        try helpers.fetchAsFile(self.allocator, full_url, local_path);
+        try self.fetchFullOptions(url_path, local_path);
         return local_path;
+    }
+
+    pub fn findSectionWithFallback(self: *DebuginfodContext, build_id: []u8, section: []const u8) ![]u8 {
+        // TODO: fallback to "findExecutable" + extract from elf, if server don't implement section?
+        return try self.findSection(build_id, section);
+    }
+
+    fn getTempFilepath(allocator: std.mem.Allocator, local_path: []u8) ![]u8 {
+        const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
+        // todo: security? random filename?
+        const tmp_basename = try std.mem.concat(allocator, u8, &.{".tmp.", std.fs.path.basename(local_path)});
+        defer allocator.free(tmp_basename);
+
+        return try std.fs.path.join(allocator, &.{local_dirname, tmp_basename});
+    }
+
+    fn fetchFullOptions(self: *DebuginfodContext, url_path: []u8, local_path: []u8) !void {
+        var lastErr: anyerror = error.ErrorNotFound;
+
+        for(self.envs.urls) |url| {
+            const full_url = try std.mem.concatWithSentinel(self.allocator, u8, &.{url, url_path}, 0);
+            defer self.allocator.free(full_url);
+
+            // TODO: retrying?
+            self.fetchAsFile(full_url, local_path) catch |err| {
+                lastErr = err;
+                continue;
+            };
+            return;
+        }
+
+        return lastErr;
+    }
+
+    fn fetchAsFile(self: *DebuginfodContext, url: [:0]u8, local_path: []u8) !void {
+        const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
+        const local_path_tmp = try getTempFilepath(self.allocator, local_path);
+        defer self.allocator.free(local_path_tmp);
+
+        try std.fs.cwd().makePath(local_dirname);
+
+        errdefer std.fs.deleteFileAbsolute(local_path_tmp) catch {};
+        {
+            var file = try std.fs.createFileAbsolute(local_path_tmp, .{
+                .truncate = true,
+            });
+            defer file.close();
+
+            // var buffer: [64 * 1024]u8 = undefined; // BUG: https://github.com/ziglang/zig/pull/25235
+            var buffer: [0]u8 = undefined;
+            var writer = file.writer(&buffer);
+
+            try self.fetch(url, &writer.interface);
+        }
+
+        try std.fs.renameAbsolute(local_path_tmp, local_path);
+    }
+
+    fn fetch(self: *DebuginfodContext, url: [:0]u8, response_writer: *std.Io.Writer) !void {
+        std.log.info("fetch {s}", .{url});
+
+        self.current_url = url;
+        defer self.current_url = null;
+
+        var client = std.http.Client{
+            .allocator = self.allocator,
+        };
+        defer client.deinit();
+
+        const redirect_buffer: []u8 = try client.allocator.alloc(u8, 8 * 1024);
+        defer client.allocator.free(redirect_buffer);
+
+        var req = try client.request( .GET, try std.Uri.parse(url), .{
+            .redirect_behavior = @enumFromInt(3),
+            .keep_alive = true,
+            // todo: send user-agent
+            .headers = .{
+            },
+            // todo: send extra headers
+            .extra_headers = &.{},
+            .privileged_headers = &.{},
+        });
+        defer req.deinit();
+
+        try req.sendBodiless();
+        var response = try req.receiveHead(redirect_buffer);
+        if(response.head.status != .ok) {
+            return error.StatusNotOk;
+        }
+
+        var it = response.head.iterateHeaders();
+        var response_headers = try getResponseHeaders(&it);
+        response_headers.allocator = self.allocator;
+        defer response_headers.deinit();
+
+        self.current_response_headers = &response_headers;
+        defer self.current_response_headers = null;
+
+        var file_size: usize = 0;  // default unknown size
+        if(response_headers.size) |size| {
+            file_size = size;
+        } else if(response.head.content_encoding == .identity and response.head.content_length != null) {
+            file_size = response.head.content_length.?;
+        }
+
+        const decompress_buffer: []u8 = switch (response.head.content_encoding) {
+            .identity => &.{},
+            .zstd => try client.allocator.alloc(u8, std.compress.zstd.default_window_len),
+            .deflate, .gzip => try client.allocator.alloc(u8, std.compress.flate.max_window_len),
+            .compress => return error.UnsupportedCompressionMethod,
+        };
+        defer client.allocator.free(decompress_buffer);
+
+        var transfer_buffer: [64]u8 = undefined;
+        var decompress: std.http.Decompress = undefined;
+        const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
+
+        var current_writed_bytes: usize = 0;
+        while (true) {
+            current_writed_bytes += reader.stream(response_writer, .unlimited) catch |err| switch (err) {
+                error.EndOfStream => break,
+                error.ReadFailed => return response.bodyErr().?,
+                else => |e| return e,
+            };
+
+            // todo: show progress on every 64kb?
+            self.onFetchProgress(current_writed_bytes, file_size);
+        }
+    }
+
+    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: usize) void {
+        // std.log.info("onFetchProgress {d}/{d}", .{current, total});
+
+        if(self.progress_fn) |callback| {
+            // todo: handle response from callback? what this response is doing?
+            _ = callback(self, @intCast(current), @intCast(total));
+        }
+    }
+
+    fn getResponseHeaders(it: *std.http.HeaderIterator) !DebuginfodResponeHeaders {
+        var out: DebuginfodResponeHeaders = .{};
+        while(it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-size")) {
+                out.size = try std.fmt.parseInt(usize, header.value, 10);
+            } else if (std.ascii.eqlIgnoreCase( header.name,"x-debuginfod-archive")) {
+                out.archive = header.value;
+            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-file")) {
+                out.file = header.value;
+            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-imasignature")) {
+                // fixme: maybe hex to bytes
+                out.imasignature = header.value;
+            }
+        }
+        return out;
     }
 };

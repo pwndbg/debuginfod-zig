@@ -46,25 +46,28 @@ pub fn build(b: *std.Build) void {
     // file path. In this case, we set up `exe_mod` to import `lib_mod`.
     // exe_mod.addImport("libdebuginfo_zig_lib", lib_mod);
 
-    // Now, we will create a static library based on the module we created above.
-    // This creates a `std.Build.Step.Compile`, which is the build step responsible
-    // for actually invoking the compiler.
-    const lib = b.addLibrary(.{
+    const version: std.SemanticVersion = .{
+        .major = 1,
+        .minor = 0,
+        .patch = 192,
+    };
+    const lib_dynamic = b.addLibrary(.{
         .linkage = .dynamic,
         .name = "debuginfo",
         .root_module = lib_mod,
-        .version = .{
-            .major = 1,
-            .minor = 0,
-            .patch = 192,
-        },
+        .version = version,
     });
-    lib.setVersionScript(b.path("version.map"));
+    lib_dynamic.setVersionScript(b.path("version.map"));
+    b.installArtifact(lib_dynamic);
 
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
+    const lib_static = b.addLibrary(.{
+        .linkage = .static,
+        .name = "debuginfo",
+        .root_module = lib_mod,
+        .version = version,
+    });
+    lib_static.setVersionScript(b.path("version.map"));
+    b.installArtifact(lib_static);
 
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // // rather than a static library.
