@@ -1,0 +1,12 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: debuginfod
+Description: libdebuginfo rewritten in Zig - a drop-in replacement for libdebuginfo-gnu
+Version: @VERSION@
+URL: https://github.com/patryk4815/debuginfod-zig
+
+Libs: -L${libdir} -ldebuginfod
+Cflags: -I${includedir}

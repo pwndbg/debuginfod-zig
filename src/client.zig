@@ -4,6 +4,27 @@ const helpers = @import("helpers.zig");
 pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
 pub const FindCallbackFnType = fn(handle: *DebuginfodContext, build_id: []u8, url: []const u8) anyerror![]u8;
 
+// pub const std_options: std.Options = .{
+//     .logFn = logFn,
+//     .log_level = .debug,
+// };
+//
+// var log_level: std.log.Level = std.log.default_level;
+//
+// fn logFn(
+//     comptime message_level: std.log.Level,
+//     comptime scope: @TypeOf(.enum_literal),
+//     comptime format: []const u8,
+//     args: anytype,
+// ) void {
+//     if (@intFromEnum(message_level) <= @intFromEnum(log_level)) {
+//         // default is stderr
+//         std.log.defaultLog(message_level, scope, format, args);
+//     }
+// }
+//
+// const my_log = std.log.scoped(.my_scope);
+
 pub const DebuginfodEnvs = struct {
     // required
     urls: [][]const u8 = &.{},
@@ -279,7 +300,6 @@ pub const DebuginfodContext = struct {
             const full_url = try std.mem.concatWithSentinel(self.allocator, u8, &.{url, url_path}, 0);
             defer self.allocator.free(full_url);
 
-            // TODO: retrying?
             self.fetchAsFile(full_url, local_path) catch |err| {
                 lastErr = err;
                 continue;
@@ -329,6 +349,7 @@ pub const DebuginfodContext = struct {
         defer client.allocator.free(redirect_buffer);
 
         // TODO: connect timeout? setsocketopt
+        // TODO: self.envs.fetch_retry_limit; (bo moze byc status code 500? lub conn err)
         var req = try client.request( .GET, try std.Uri.parse(url), .{
             .redirect_behavior = @enumFromInt(3),
             .keep_alive = true,
