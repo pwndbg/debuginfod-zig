@@ -4,7 +4,10 @@ const manifest = @import("build.zig.zon");
 pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Build.Step.InstallFile {
     const allocator = b.allocator;
     const version_str = try std.fmt.allocPrint(allocator, "{d}.{d}", .{version.major, version.minor});
-    const absolute_prefix = try std.fs.cwd().realpathAlloc(allocator, b.install_prefix);
+    const absolute_prefix = b.install_prefix;
+    if (!std.fs.path.isAbsolute(absolute_prefix)) {
+        @panic("Prefix must be absolute!");
+    }
 
     const input_file = try std.fs.cwd().openFile("upstream/libdebuginfod.pc.in", .{});
     defer input_file.close();
