@@ -249,18 +249,3 @@ export fn debuginfod_set_verbose_fd(
     // TODO: nice to have
     return;
 }
-
-export fn debuginfod_find_metadata(
-    handle: ?*client.DebuginfodContext,
-    key: [*c]const u8,
-    value: [*c]const u8,
-    path_out_c: [*c][*c]c_char,
-) c_int {
-    const ctx = handle orelse return -1;
-    _ = ctx;
-    _ = key;
-    _ = value;
-    _ = path_out_c;
-    // TODO: nice to have
-    return -1;
-}

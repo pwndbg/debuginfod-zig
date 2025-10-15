@@ -2,11 +2,10 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 
 pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
-pub const FindCallbackFnType = fn(handle: *DebuginfodContext, build_id: []u8, url: []const u8) anyerror![]u8;
 
 // pub const std_options: std.Options = .{
 //     .logFn = logFn,
-//     .log_level = .debug,
+//     .log_level = .err,
 // };
 //
 // var log_level: std.log.Level = std.log.default_level;

@@ -89,22 +89,6 @@ int debuginfod_find_section (debuginfod_client *client,
 			     const char *section,
 			     char **path);
 
-/* Query the urls contained in $DEBUGINFOD_URLS for metadata
-   with given query key/value.
-   
-   If successful, return a file descriptor to the JSON document
-   describing matches, otherwise return a negative POSIX error code.  If
-   successful, set *path to a strdup'd copy of the name of the same
-   file in the cache.  Caller must free() it later.
-   
-   See the debuginfod-find(1) man page for examples of the supported types
-   of key/value queries and their JSON results.
-   */
-int debuginfod_find_metadata (debuginfod_client *client,
-                              const char *key,
-                              const char* value,
-                              char **path);
-
 typedef int (*debuginfod_progressfn_t)(debuginfod_client *c, long a, long b);
 void debuginfod_set_progressfn(debuginfod_client *c,
 			       debuginfod_progressfn_t fn);
