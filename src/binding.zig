@@ -1,24 +1,20 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const client = @import("client.zig");
+const log = @import("log.zig");
 
-pub const std_options: std.Options = .{
-    .log_level = .debug,
-};
+const CErrNoFound = -@as(i32, @intFromEnum(std.posix.E.NOENT));
+const CErrUnknown = -@as(i32, @intFromEnum(std.posix.E.INVAL));
 
 export fn debuginfod_begin() ?*client.DebuginfodContext {
-    std.log.info("debuginfod_begin enter", .{});
-
     const ctx = client.DebuginfodContext.init(std.heap.c_allocator) catch |err| {
-        std.log.err("debuginfod_begin init err: {}", .{err});
+        log.warn("debuginfod_begin init err: {}", .{err});
         return null;
     };
     return ctx;
 }
 
 export fn debuginfod_end(handle: ?*client.DebuginfodContext) void {
-    std.log.info("debuginfod_end enter", .{});
-
     const ctx = handle orelse return;
     defer ctx.deinit();
 }
@@ -32,14 +28,17 @@ export fn debuginfod_find_debuginfo(
     const ctx = handle orelse return -1;
 
     const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        std.log.err("build_id_to_hex err: {}", .{err});
-        return -1;
+        log.warn("build_id_to_hex err: {}", .{err});
+        return CErrUnknown;
     };
     defer ctx.allocator.free(build_id_casted);
 
     const local_path = ctx.findDebuginfo(build_id_casted) catch |err| {
-        std.log.err("findDebuginfo err: {}", .{err});
-        return -1;
+        log.warn("findDebuginfo err: {}", .{err});
+        return switch (err) {
+            error.FetchStatusNotFound => CErrNoFound,
+            else => CErrUnknown
+        };
     };
     defer ctx.allocator.free(local_path);
 
@@ -47,13 +46,13 @@ export fn debuginfod_find_debuginfo(
         .CLOEXEC = true,
         .ACCMODE = .RDONLY,
     }, 0) catch |err| {
-        std.log.err("open err: {}", .{err});
-        return -1;
+        log.warn("open err: {}", .{err});
+        return CErrUnknown;
     };
 
     const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        std.log.err("findDebuginfo err2: {}", .{err});
-        return -1;
+        log.warn("findDebuginfo err2: {}", .{err});
+        return CErrUnknown;
     };
     path_out_c.* = @ptrCast(path_out.ptr);
     return fd;
@@ -68,14 +67,17 @@ export fn debuginfod_find_executable(
     const ctx = handle orelse return -1;
 
     const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        std.log.err("build_id_to_hex err: {}", .{err});
-        return -1;
+        log.warn("build_id_to_hex err: {}", .{err});
+        return CErrUnknown;
     };
     defer ctx.allocator.free(build_id_casted);
 
     const local_path = ctx.findExecutable(build_id_casted) catch |err| {
-        std.log.err("findExecutable err: {}", .{err});
-        return -1;
+        log.warn("findExecutable err: {}", .{err});
+        return switch (err) {
+            error.FetchStatusNotFound => CErrNoFound,
+            else => CErrUnknown
+        };
     };
     defer ctx.allocator.free(local_path);
 
@@ -83,13 +85,13 @@ export fn debuginfod_find_executable(
         .CLOEXEC = true,
         .ACCMODE = .RDONLY,
     }, 0) catch |err| {
-        std.log.err("open err: {}", .{err});
-        return -1;
+        log.warn("open err: {}", .{err});
+        return CErrUnknown;
     };
 
     const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        std.log.err("findExecutable err2: {}", .{err});
-        return -1;
+        log.warn("findExecutable err2: {}", .{err});
+        return CErrUnknown;
     };
     path_out_c.* = @ptrCast(path_out.ptr);
     return fd;
@@ -104,16 +106,19 @@ export fn debuginfod_find_source(
 ) c_int {
     const ctx = handle orelse return -1;
 
+    const source_path_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(source_path)));
     const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        std.log.err("build_id_to_hex err: {}", .{err});
-        return -1;
+        log.warn("build_id_to_hex err: {}", .{err});
+        return CErrUnknown;
     };
     defer ctx.allocator.free(build_id_casted);
 
-    const source_path_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(source_path)));
     const local_path = ctx.findSource(build_id_casted, source_path_casted) catch |err| {
-        std.log.err("findSource err: {}", .{err});
-        return -1;
+        log.warn("findSource err: {}", .{err});
+        return switch (err) {
+            error.FetchStatusNotFound => CErrNoFound,
+            else => CErrUnknown
+        };
     };
     defer ctx.allocator.free(local_path);
 
@@ -121,13 +126,13 @@ export fn debuginfod_find_source(
         .CLOEXEC = true,
         .ACCMODE = .RDONLY,
     }, 0) catch |err| {
-        std.log.err("open err: {}", .{err});
-        return -1;
+        log.warn("open err: {}", .{err});
+        return CErrUnknown;
     };
 
     const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        std.log.err("findSource err2: {}", .{err});
-        return -1;
+        log.warn("findSource err2: {}", .{err});
+        return CErrUnknown;
     };
     path_out_c.* = @ptrCast(path_out.ptr);
     return fd;
@@ -143,16 +148,19 @@ export fn debuginfod_find_section(
     comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
     const ctx = handle orelse return -1;
 
+    const section_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(section)));
     const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        std.log.err("build_id_to_hex err: {}", .{err});
-        return -1;
+        log.warn("build_id_to_hex err: {}", .{err});
+        return CErrUnknown;
     };
     defer ctx.allocator.free(build_id_casted);
 
-    const section_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(section)));
     const local_path = ctx.findSectionWithFallback(build_id_casted, section_casted) catch |err| {
-        std.log.err("findSection err: {}", .{err});
-        return -1;
+        log.warn("findSection err: {}", .{err});
+        return switch (err) {
+            error.FetchStatusNotFound => CErrNoFound,
+            else => CErrUnknown
+        };
     };
     defer ctx.allocator.free(local_path);
 
@@ -160,13 +168,13 @@ export fn debuginfod_find_section(
         .CLOEXEC = true,
         .ACCMODE = .RDONLY,
     }, 0) catch |err| {
-        std.log.err("open err: {}", .{err});
-        return -1;
+        log.warn("open err: {}", .{err});
+        return CErrUnknown;
     };
 
     const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        std.log.err("findSection err2: {}", .{err});
-        return -1;
+        log.warn("findSection err2: {}", .{err});
+        return CErrUnknown;
     };
     path_out_c.* = @ptrCast(path_out.ptr);
     return fd;
@@ -183,8 +191,6 @@ export fn debuginfod_set_user_data(
 export fn debuginfod_get_user_data(
     handle: ?*client.DebuginfodContext,
 ) ?*anyopaque {
-    // std.log.info("debuginfod_get_user_data enter", .{});
-
     const ctx = handle orelse return null;
     return ctx.current_userdata;
 }
@@ -192,8 +198,6 @@ export fn debuginfod_get_user_data(
 export fn debuginfod_get_url(
     handle: ?*client.DebuginfodContext,
 ) [*c]const c_char {
-    // std.log.info("debuginfod_get_url enter", .{});
-
     const ctx = handle orelse return null;
     const url = ctx.current_url orelse return null;
     return @ptrCast(url.ptr);
@@ -202,8 +206,6 @@ export fn debuginfod_get_url(
 export fn debuginfod_get_headers(
     handle: ?*client.DebuginfodContext,
 ) [*c]const c_char {
-    // std.log.info("debuginfod_get_headers enter", .{});
-
     const ctx = handle orelse return null;
     const headers = ctx.current_response_headers orelse return null;
     const cbuf = headers.toBinding() catch return null;
@@ -245,7 +247,5 @@ export fn debuginfod_set_verbose_fd(
 ) void {
     const ctx = handle orelse return;
     _ = ctx;
-    _ = fd;
-    // TODO: nice to have
-    return;
+    log.setLogFile(.{ .handle = fd });
 }

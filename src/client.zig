@@ -1,28 +1,8 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
+const log = @import("log.zig");
 
 pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
-
-// pub const std_options: std.Options = .{
-//     .logFn = logFn,
-//     .log_level = .err,
-// };
-//
-// var log_level: std.log.Level = std.log.default_level;
-//
-// fn logFn(
-//     comptime message_level: std.log.Level,
-//     comptime scope: @TypeOf(.enum_literal),
-//     comptime format: []const u8,
-//     args: anytype,
-// ) void {
-//     if (@intFromEnum(message_level) <= @intFromEnum(log_level)) {
-//         // default is stderr
-//         std.log.defaultLog(message_level, scope, format, args);
-//     }
-// }
-//
-// const my_log = std.log.scoped(.my_scope);
 
 pub const DebuginfodEnvs = struct {
     // required
@@ -36,7 +16,6 @@ pub const DebuginfodEnvs = struct {
     fetch_retry_limit: usize = 2,
     fetch_progress_to_stderr: bool = false,
     fetch_headers: []const std.http.Header = &.{},
-    verbose_to_stderr: bool = false,
 
     fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator) !void {
         self.urls = try getUrls(allocator);
@@ -58,9 +37,15 @@ pub const DebuginfodEnvs = struct {
         if(std.posix.getenv("DEBUGINFOD_PROGRESS") != null) {
             self.fetch_progress_to_stderr = true;
         }
-        if(std.posix.getenv("DEBUGINFOD_VERBOSE") != null) {
-            self.verbose_to_stderr = true;
+    }
+
+    pub fn deinit(self: *DebuginfodEnvs, allocator: std.mem.Allocator) void {
+        for (self.urls) |url| {
+            allocator.free(url);
         }
+        allocator.free(self.urls);
+        allocator.free(self.cache_path);
+        self.* = undefined;
     }
 
     // fn getHeadersFromFile(allocator: std.mem.Allocator) ![]const std.http.Header {
@@ -83,12 +68,11 @@ pub const DebuginfodEnvs = struct {
             var it = std.mem.tokenizeAny(u8, val, " ");
             while (it.next()) |url| {
                 if (url.len == 0) continue;
-                // fixme: url is dangling pointer?
-                try list.append(allocator, url);
+                try list.append(allocator, try allocator.dupe(u8, url));
             }
         }
         if (list.items.len == 0) {
-            // TODO: default const
+            // TODO: default const?
             try list.append(allocator, "https://debuginfod.debian.net");
         }
         return try list.toOwnedSlice(allocator);
@@ -116,6 +100,22 @@ pub const DebuginfodResponeHeaders = struct {
 
     allocator: ?std.mem.Allocator = null,
     _buffer: ?[:0]u8 = null,
+
+    fn parseHeaders(it: *std.http.HeaderIterator) !DebuginfodResponeHeaders {
+        var out: DebuginfodResponeHeaders = .{};
+        while(it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-size")) {
+                out.size = try std.fmt.parseInt(usize, header.value, 10);
+            } else if (std.ascii.eqlIgnoreCase( header.name,"x-debuginfod-archive")) {
+                out.archive = header.value;
+            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-file")) {
+                out.file = header.value;
+            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-imasignature")) {
+                out.imasignature = header.value;
+            }
+        }
+        return out;
+    }
 
     pub fn deinit(self: *DebuginfodResponeHeaders) void {
         const allocator = self.allocator orelse return;
@@ -154,49 +154,37 @@ pub const DebuginfodResponeHeaders = struct {
 };
 
 pub const DebuginfodContext = struct {
-    arena: *std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    envs: DebuginfodEnvs,
-    add_headers: []const std.http.Header,
-    progress_fn: ?*ProgressFnType,
+    envs: DebuginfodEnvs = .{},
+    add_headers: []const std.http.Header = &[_]std.http.Header{},
+    progress_fn: ?*ProgressFnType = null,
 
     // variables accessable only in `onFetchProgress`
-    current_userdata: ?*anyopaque,
-    current_url: ?[:0]const u8,
-    current_response_headers: ?*DebuginfodResponeHeaders,
+    current_userdata: ?*anyopaque = null,
+    current_url: ?[:0]const u8 = null,
+    current_response_headers: ?*DebuginfodResponeHeaders = null,
 
-    pub fn init(base_allocator: std.mem.Allocator) !*DebuginfodContext {
-        const arena = try base_allocator.create(std.heap.ArenaAllocator);
-        errdefer base_allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(base_allocator);
-        errdefer arena.deinit();
-        const allocator = arena.allocator();
-
+    pub fn init(allocator: std.mem.Allocator) !*DebuginfodContext {
         const ctx = try allocator.create(DebuginfodContext);
-        ctx.arena = arena;
-        ctx.allocator = allocator;
-        ctx.envs = .{};
-        try DebuginfodEnvs.init(&ctx.envs, allocator);
+        errdefer allocator.destroy(ctx);
 
-        ctx.add_headers = &[_] std.http.Header{};
-        ctx.progress_fn = null;
-
-        ctx.current_userdata = null;
-        ctx.current_url = null;
-        ctx.current_response_headers = null;
+        ctx.* = .{
+            .allocator = allocator,
+        };
+        try (&ctx.envs).init(allocator);
         return ctx;
     }
 
     pub fn deinit(self: *DebuginfodContext) void {
-        const allocator = self.arena.child_allocator;
-        self.arena.deinit();
-        allocator.destroy(self.arena);
+        const allocator = self.allocator;
+        (&self.envs).deinit(allocator);
+        allocator.destroy(self);
         self.* = undefined;
     }
 
     pub fn findDebuginfo(self: *DebuginfodContext, build_id: []u8) ![]u8 {
-        std.log.info("findDebuginfo {s}", .{build_id});
+        log.info("findDebuginfo {s}", .{build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "debuginfo"});
         errdefer self.allocator.free(local_path);  // caller must free
@@ -213,7 +201,7 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findExecutable(self: *DebuginfodContext, build_id: []u8) ![]u8 {
-        std.log.info("findExecutable {s}", .{build_id});
+        log.info("findExecutable {s}", .{build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "executable"});
         errdefer self.allocator.free(local_path);  // caller must free
@@ -230,7 +218,7 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findSource(self: *DebuginfodContext, build_id: []u8, source_path: []const u8) ![]u8 {
-        std.log.info("findSource {s} {s}", .{build_id, source_path});
+        log.info("findSource {s} {s}", .{build_id, source_path});
 
         const source_path_encoded = try helpers.urlencodePart(self.allocator, source_path);
         defer self.allocator.free(source_path_encoded);
@@ -256,7 +244,7 @@ pub const DebuginfodContext = struct {
     }
 
     pub fn findSection(self: *DebuginfodContext, build_id: []u8, section: []const u8) ![]u8 {
-        std.log.info("findSection {s} {s}", .{build_id, section});
+        log.info("findSection {s} {s}", .{build_id, section});
 
         const section_escaped = try helpers.escapeFilename(self.allocator, section);
         defer self.allocator.free(section_escaped);
@@ -334,7 +322,7 @@ pub const DebuginfodContext = struct {
     }
 
     fn fetch(self: *DebuginfodContext, url: [:0]u8, response_writer: *std.Io.Writer) !void {
-        std.log.info("fetch {s}", .{url});
+        log.info("fetch {s}", .{url});
 
         self.current_url = url;
         defer self.current_url = null;
@@ -363,12 +351,16 @@ pub const DebuginfodContext = struct {
 
         try req.sendBodiless();
         var response = try req.receiveHead(redirect_buffer);
+
+        if(response.head.status == .not_found) {
+            return error.FetchStatusNotFound;
+        }
         if(response.head.status != .ok) {
-            return error.StatusNotOk;
+            return error.FetchStatusNotOk;
         }
 
         var it = response.head.iterateHeaders();
-        var response_headers = try getResponseHeaders(&it);
+        var response_headers = try DebuginfodResponeHeaders.parseHeaders(&it);
         response_headers.allocator = self.allocator;
         defer response_headers.deinit();
 
@@ -423,28 +415,11 @@ pub const DebuginfodContext = struct {
     }
 
     fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) void {
-        // std.log.info("onFetchProgress {d}/{d}", .{current, total});
+        // log.info("onFetchProgress {d}/{d}", .{current, total});
 
         if(self.progress_fn) |callback| {
             // todo: handle response from callback? what this response is doing?
             _ = callback(self, @intCast(current), @intCast(total orelse 0));
         }
-    }
-
-    fn getResponseHeaders(it: *std.http.HeaderIterator) !DebuginfodResponeHeaders {
-        var out: DebuginfodResponeHeaders = .{};
-        while(it.next()) |header| {
-            if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-size")) {
-                out.size = try std.fmt.parseInt(usize, header.value, 10);
-            } else if (std.ascii.eqlIgnoreCase( header.name,"x-debuginfod-archive")) {
-                out.archive = header.value;
-            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-file")) {
-                out.file = header.value;
-            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-imasignature")) {
-                // fixme: maybe hex to bytes
-                out.imasignature = header.value;
-            }
-        }
-        return out;
     }
 };
