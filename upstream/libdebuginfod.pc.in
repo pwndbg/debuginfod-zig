@@ -4,7 +4,7 @@ libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
 Name: debuginfod
-Description: libdebuginfo rewritten in Zig - a drop-in replacement for libdebuginfo-gnu
+Description: libdebuginfod rewritten in Zig - a drop-in replacement for GNU's libdebuginfod
 Version: @VERSION@
 URL: https://github.com/patryk4815/debuginfod-zig
 

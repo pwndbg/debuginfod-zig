@@ -29,12 +29,12 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 - DEBUGINFOD_MAXSIZE
 
 ## ENV's not-implemented:
-- DEBUGINFOD_TIMEOUT
-- DEBUGINFOD_RETRY_LIMIT
-- DEBUGINFOD_PROGRESS
-- DEBUGINFOD_VERBOSE
-- DEBUGINFOD_HEADERS_FILE
-- DEBUGINFOD_IMA_CERT_PATH
+- DEBUGINFOD_TIMEOUT (hard)
+- DEBUGINFOD_RETRY_LIMIT (easy)
+- DEBUGINFOD_PROGRESS (easy)
+- DEBUGINFOD_VERBOSE (easy)
+- DEBUGINFOD_HEADERS_FILE (medium)
+- DEBUGINFOD_IMA_CERT_PATH (hard?)
 
 ## What is missing:
 - auto-cleanup old debuginfo files
