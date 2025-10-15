@@ -42,5 +42,4 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 - auto-cleanup old debuginfo files
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
-- func debuginfod_set_verbose_fd
 - func debuginfod_add_http_header
