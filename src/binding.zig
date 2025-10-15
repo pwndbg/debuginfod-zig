@@ -6,6 +6,90 @@ const log = @import("log.zig");
 const CErrNoFound = -@as(i32, @intFromEnum(std.posix.E.NOENT));
 const CErrUnknown = -@as(i32, @intFromEnum(std.posix.E.INVAL));
 
+const Mode = enum {
+    Debuginfo,
+    Executable,
+    Source,
+    Section,
+};
+
+fn debuginfod_find_common(
+    handle: ?*client.DebuginfodContext,
+    build_id: [*c]const u8,
+    build_id_len: c_int,
+    extra: ?[*c]const c_char, // np. source_path lub section
+    mode: Mode,
+    path_out_c: [*c][*c]c_char,
+) c_int {
+    const ctx = handle orelse return CErrUnknown;
+
+    const build_id_hex = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
+        log.warn("build_id_to_hex err: {}", .{err});
+        return CErrUnknown;
+    };
+    defer ctx.allocator.free(build_id_hex);
+
+    var local_path: []const u8 = undefined;
+    switch (mode) {
+        .Debuginfo => {
+            local_path = ctx.findDebuginfo(build_id_hex) catch |err| {
+                log.warn("findDebuginfo err: {}", .{err});
+                return switch (err) {
+                    error.FetchStatusNotFound => CErrNoFound,
+                    else => CErrUnknown,
+                };
+            };
+        },
+        .Executable => {
+            local_path = ctx.findExecutable(build_id_hex) catch |err| {
+                log.warn("findExecutable err: {}", .{err});
+                return switch (err) {
+                    error.FetchStatusNotFound => CErrNoFound,
+                    else => CErrUnknown,
+                };
+            };
+        },
+        .Source => {
+            if (extra == null) return CErrUnknown;
+            const source_path_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(extra.?)));
+            local_path = ctx.findSource(build_id_hex, source_path_casted) catch |err| {
+                log.warn("findSource err: {}", .{err});
+                return switch (err) {
+                    error.FetchStatusNotFound => CErrNoFound,
+                    else => CErrUnknown,
+                };
+            };
+        },
+        .Section => {
+            if (extra == null) return CErrUnknown;
+            const section_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(extra.?)));
+            local_path = ctx.findSectionWithFallback(build_id_hex, section_casted) catch |err| {
+                log.warn("findSection err: {}", .{err});
+                return switch (err) {
+                    error.FetchStatusNotFound => CErrNoFound,
+                    else => CErrUnknown,
+                };
+            };
+        },
+    }
+    defer ctx.allocator.free(local_path);
+
+    const fd = std.posix.open(local_path, .{
+        .CLOEXEC = true,
+        .ACCMODE = .RDONLY,
+    }, 0) catch |err| {
+        log.warn("open err: {}", .{err});
+        return CErrUnknown;
+    };
+
+    const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
+        log.warn("toCString err: {}", .{err});
+        return CErrUnknown;
+    };
+    path_out_c.* = @ptrCast(path_out.ptr);
+    return fd;
+}
+
 export fn debuginfod_begin() ?*client.DebuginfodContext {
     const ctx = client.DebuginfodContext.init(std.heap.c_allocator) catch |err| {
         log.warn("debuginfod_begin init err: {}", .{err});
@@ -25,37 +109,7 @@ export fn debuginfod_find_debuginfo(
     build_id_len: c_int,
     path_out_c: [*c][*c]c_char,
 ) c_int {
-    const ctx = handle orelse return -1;
-
-    const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        log.warn("build_id_to_hex err: {}", .{err});
-        return CErrUnknown;
-    };
-    defer ctx.allocator.free(build_id_casted);
-
-    const local_path = ctx.findDebuginfo(build_id_casted) catch |err| {
-        log.warn("findDebuginfo err: {}", .{err});
-        return switch (err) {
-            error.FetchStatusNotFound => CErrNoFound,
-            else => CErrUnknown
-        };
-    };
-    defer ctx.allocator.free(local_path);
-
-    const fd = std.posix.open(local_path, .{
-        .CLOEXEC = true,
-        .ACCMODE = .RDONLY,
-    }, 0) catch |err| {
-        log.warn("open err: {}", .{err});
-        return CErrUnknown;
-    };
-
-    const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        log.warn("findDebuginfo err2: {}", .{err});
-        return CErrUnknown;
-    };
-    path_out_c.* = @ptrCast(path_out.ptr);
-    return fd;
+    return debuginfod_find_common(handle, build_id, build_id_len, null, .Debuginfo, path_out_c);
 }
 
 export fn debuginfod_find_executable(
@@ -64,37 +118,7 @@ export fn debuginfod_find_executable(
     build_id_len: c_int,
     path_out_c: [*c][*c]c_char,
 ) c_int {
-    const ctx = handle orelse return -1;
-
-    const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        log.warn("build_id_to_hex err: {}", .{err});
-        return CErrUnknown;
-    };
-    defer ctx.allocator.free(build_id_casted);
-
-    const local_path = ctx.findExecutable(build_id_casted) catch |err| {
-        log.warn("findExecutable err: {}", .{err});
-        return switch (err) {
-            error.FetchStatusNotFound => CErrNoFound,
-            else => CErrUnknown
-        };
-    };
-    defer ctx.allocator.free(local_path);
-
-    const fd = std.posix.open(local_path, .{
-        .CLOEXEC = true,
-        .ACCMODE = .RDONLY,
-    }, 0) catch |err| {
-        log.warn("open err: {}", .{err});
-        return CErrUnknown;
-    };
-
-    const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        log.warn("findExecutable err2: {}", .{err});
-        return CErrUnknown;
-    };
-    path_out_c.* = @ptrCast(path_out.ptr);
-    return fd;
+    return debuginfod_find_common(handle, build_id, build_id_len, null, .Executable, path_out_c);
 }
 
 export fn debuginfod_find_source(
@@ -104,38 +128,7 @@ export fn debuginfod_find_source(
     source_path: [*c]const c_char,
     path_out_c: [*c][*c]c_char,
 ) c_int {
-    const ctx = handle orelse return -1;
-
-    const source_path_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(source_path)));
-    const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        log.warn("build_id_to_hex err: {}", .{err});
-        return CErrUnknown;
-    };
-    defer ctx.allocator.free(build_id_casted);
-
-    const local_path = ctx.findSource(build_id_casted, source_path_casted) catch |err| {
-        log.warn("findSource err: {}", .{err});
-        return switch (err) {
-            error.FetchStatusNotFound => CErrNoFound,
-            else => CErrUnknown
-        };
-    };
-    defer ctx.allocator.free(local_path);
-
-    const fd = std.posix.open(local_path, .{
-        .CLOEXEC = true,
-        .ACCMODE = .RDONLY,
-    }, 0) catch |err| {
-        log.warn("open err: {}", .{err});
-        return CErrUnknown;
-    };
-
-    const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        log.warn("findSource err2: {}", .{err});
-        return CErrUnknown;
-    };
-    path_out_c.* = @ptrCast(path_out.ptr);
-    return fd;
+    return debuginfod_find_common(handle, build_id, build_id_len, source_path, .Source, path_out_c);
 }
 
 export fn debuginfod_find_section(
@@ -146,38 +139,7 @@ export fn debuginfod_find_section(
     path_out_c: [*c][*c]c_char,
 ) c_int {
     comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
-    const ctx = handle orelse return -1;
-
-    const section_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(section)));
-    const build_id_casted = helpers.build_id_to_hex(ctx.allocator, build_id, build_id_len) catch |err| {
-        log.warn("build_id_to_hex err: {}", .{err});
-        return CErrUnknown;
-    };
-    defer ctx.allocator.free(build_id_casted);
-
-    const local_path = ctx.findSectionWithFallback(build_id_casted, section_casted) catch |err| {
-        log.warn("findSection err: {}", .{err});
-        return switch (err) {
-            error.FetchStatusNotFound => CErrNoFound,
-            else => CErrUnknown
-        };
-    };
-    defer ctx.allocator.free(local_path);
-
-    const fd = std.posix.open(local_path, .{
-        .CLOEXEC = true,
-        .ACCMODE = .RDONLY,
-    }, 0) catch |err| {
-        log.warn("open err: {}", .{err});
-        return CErrUnknown;
-    };
-
-    const path_out = helpers.toCString(std.heap.c_allocator, local_path) catch |err| {
-        log.warn("findSection err2: {}", .{err});
-        return CErrUnknown;
-    };
-    path_out_c.* = @ptrCast(path_out.ptr);
-    return fd;
+    return debuginfod_find_common(handle, build_id, build_id_len, section, .Section, path_out_c);
 }
 
 export fn debuginfod_set_user_data(
