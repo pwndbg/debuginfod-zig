@@ -18,8 +18,8 @@ While `debuginfod` works well only on Linux, it comes with several limitations t
 zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe
 zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe
 
-zig build -Dtarget=x86_64-apple -Doptimize=ReleaseSafe
-zig build -Dtarget=aarch64-apple -Doptimize=ReleaseSafe
+zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe
+zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 ```
 
 ## ENV's implemented:
