@@ -13,7 +13,7 @@ pub const OsRelease = struct {
     }
 };
 
-fn parseOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
+fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
@@ -55,15 +55,67 @@ fn parseOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRe
     return output;
 }
 
-fn getOsRelease(allocator: std.mem.Allocator) !OsRelease {
-    if (builtin.os.tag != .linux) {
-        // TODO: macOS parsing `/System/Library/CoreServices/SystemVersion.plist`
-        return .{};
+fn parsePlistLine(reader: *std.Io.Reader, prefix: []const u8, suffix: []const u8) ![]const u8 {
+    const line = try reader.takeDelimiterExclusive('\n');
+    const line_trimmed = std.mem.trim(u8, line, " \t\r\n");
+    if(!(std.mem.startsWith(u8, line_trimmed, prefix) and std.mem.endsWith(u8, line_trimmed, suffix))) {
+        return error.LineIsInvalid;
     }
-    return parseOsRelease(allocator, &.{ "/etc/os-release", "/usr/lib/os-release"});
+    const value = line_trimmed[(prefix.len) .. (line_trimmed.len - suffix.len)];
+    return value;
 }
 
-test "parseOsRelease parses basic os-release file" {
+fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
+    var output: OsRelease = .{};
+    errdefer output.deinit(allocator);
+
+    var file: ?std.fs.File = null;
+    for (paths) |path| {
+        file = std.fs.cwd().openFile(path, .{}) catch continue;
+        break;
+    }
+    if (file) |f| {
+        defer f.close();
+
+        var buf: [1024]u8 = undefined;
+        var reader = f.reader(&buf);
+
+        while (true) {
+            const key = parsePlistLine(&reader.interface, "<key>", "</key>") catch |err| switch (err) {
+                std.io.Reader.DelimiterError.EndOfStream => break,
+                error.LineIsInvalid => continue,
+                else => |e| return e,
+            };
+            if (std.mem.eql(u8, key, "ProductVersion")) {
+                const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
+                    std.io.Reader.DelimiterError.EndOfStream => break,
+                    error.LineIsInvalid => continue,
+                    else => |e| return e,
+                };
+                output.version = try allocator.dupe(u8, value);
+            }
+            else if (std.mem.eql(u8, key, "ProductBuildVersion")) {
+                const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
+                    std.io.Reader.DelimiterError.EndOfStream => break,
+                    error.LineIsInvalid => continue,
+                    else => |e| return e,
+                };
+                output.id = try allocator.dupe(u8, value);
+            }
+        }
+    }
+    return output;
+}
+
+fn getOsRelease(allocator: std.mem.Allocator) !OsRelease {
+    switch (builtin.os.tag) {
+        .linux => return parseLinuxOsRelease(allocator, &.{ "/etc/os-release", "/usr/lib/os-release"}),
+        .macos => return parseMacosOsRelease(allocator, &.{ "/System/Library/CoreServices/SystemVersion.plist"}),
+        else => return .{},
+    }
+}
+
+test "parseLinuxOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
 
     const fake_data =
@@ -90,7 +142,7 @@ test "parseOsRelease parses basic os-release file" {
         .sub_path = "os-release",
     });
 
-    var out = try parseOsRelease(allocator, &.{file_path});
+    var out = try parseLinuxOsRelease(allocator, &.{file_path});
     defer out.deinit(allocator);
 
     try std.testing.expect(out.id != null);
@@ -98,6 +150,49 @@ test "parseOsRelease parses basic os-release file" {
 
     try std.testing.expectEqualStrings("nixos", out.id.?);
     try std.testing.expectEqualStrings("23.11", out.version.?);
+}
+
+test "parseMacosOsRelease parses basic os-release file" {
+    const allocator = std.testing.allocator;
+
+    const fake_data =
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        \\<plist version="1.0">
+        \\<dict>
+        \\    <key>BuildID</key>
+        \\    <string>52E191FB41A9</string>
+        \\    <key>ProductBuildVersion</key>
+        \\    <string>25A354</string>
+        \\    <key>ProductCopyright</key>
+        \\    <string>1983-2025 Apple Inc.</string>
+        \\    <key>ProductName</key>
+        \\    <string>macOS</string>
+        \\    <key>ProductUserVisibleVersion</key>
+        \\    <string>26.0</string>
+        \\    <key>ProductVersion</key>
+        \\    <string>26.0</string>
+        \\    <key>iOSSupportVersion</key>
+        \\    <string>26.0</string>
+        \\</dict>
+        \\</plist>
+    ;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{tmp_path, "SystemVersion.plist"});
+    defer allocator.free(file_path);
+    try tmp_dir.dir.writeFile(.{
+        .data = fake_data,
+        .sub_path = "SystemVersion.plist",
+    });
+
+    var out = try parseMacosOsRelease(allocator, &.{file_path});
+    defer out.deinit(allocator);
+
+    try std.testing.expect(out.version != null);
+    try std.testing.expectEqualStrings("26.0", out.version.?);
 }
 
 pub fn getUserAgent(allocator: std.mem.Allocator) ![]u8 {
