@@ -496,15 +496,17 @@ pub const DebuginfodContext = struct {
             if(show_progress_stderr) {
                 progress.setCompletedItems(current_writed_bytes);
             } else {
-                self.onFetchProgress(current_writed_bytes, file_size);
+                try self.onFetchProgress(current_writed_bytes, file_size);
             }
         }
     }
 
-    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) void {
+    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) !void {
         if(self.progress_fn) |callback| {
-            // todo: handle response from callback? what this response is doing?
-            _ = callback(self, @intCast(current), @intCast(total orelse 0));
+            const download_was_canceled = callback(self, @intCast(current), @intCast(total orelse 0)) != 0;
+            if (download_was_canceled) {
+                return error.DownloadInterrupted;
+            }
         }
     }
 };
