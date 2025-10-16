@@ -393,6 +393,16 @@ pub const DebuginfodContext = struct {
         var current_writed_bytes: usize = 0;
         const writer_start_at = std.time.timestamp();
 
+        var progress: std.Progress.Node = undefined;
+        const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
+        if(show_progress_stderr) {
+            progress = std.Progress.start(.{
+                .root_name = url,
+                .estimated_total_items = file_size orelse 0,
+            });
+        }
+        defer if(show_progress_stderr) progress.end();
+
         while (true) {
             current_writed_bytes += reader.stream(response_writer, .unlimited) catch |err| switch (err) {
                 error.EndOfStream => break,
@@ -409,14 +419,15 @@ pub const DebuginfodContext = struct {
                 if(diff > maxtime) return error.DownloadMaxTimeExceed;
             }
 
-            // todo: show progress on every 64kb?
-            self.onFetchProgress(current_writed_bytes, file_size);
+            if(show_progress_stderr) {
+                progress.setCompletedItems(current_writed_bytes);
+            } else {
+                self.onFetchProgress(current_writed_bytes, file_size);
+            }
         }
     }
 
     fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) void {
-        // log.info("onFetchProgress {d}/{d}", .{current, total});
-
         if(self.progress_fn) |callback| {
             // todo: handle response from callback? what this response is doing?
             _ = callback(self, @intCast(current), @intCast(total orelse 0));
