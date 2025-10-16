@@ -38,61 +38,6 @@ test "build_id_to_hex works for raw bytes input" {
     try std.testing.expect(std.mem.eql(u8, out, "4a7c2f"));
 }
 
-pub fn fetchAsFile(base_allocator: std.mem.Allocator, full_url: []const u8, local_path: []const u8) !void {
-    var arena = std.heap.ArenaAllocator.init(base_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-
-    if (std.fs.path.dirname(local_path)) |dirname| {
-        try std.fs.cwd().makePath(dirname);
-    }
-
-    var file = try std.fs.cwd().createFile(local_path, .{
-        .truncate = true,
-    });
-    defer file.close();
-
-    var client = std.http.Client{
-        .allocator = allocator,
-    };
-    defer client.deinit();
-    // var buffer: [64 * 1024]u8 = undefined; // BUG: https://github.com/ziglang/zig/pull/25235
-    var buffer: [0]u8 = undefined;
-    var writer = file.writer(&buffer);
-
-    const resp = try client.fetch(.{
-        .method = .GET,
-        .location = .{
-            .url = full_url,
-        },
-        .response_writer = &writer.interface,
-    });
-    if (resp.status != .ok) {
-        return error.InvalidStatusCode;
-    }
-    // TODO: tmpfile / movefile
-}
-
-test "fetch ubuntu base tarball and save to file" {
-    const allocator = std.testing.allocator;
-
-    // const url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.raw";
-    const url = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz";
-    const out_path = "ubuntu-base.tar.gz";
-
-    defer std.fs.cwd().deleteFile(out_path) catch {};
-
-    try fetchAsFile(allocator, url, out_path);
-
-    var file = try std.fs.cwd().openFile(out_path, .{});
-    defer file.close();
-
-    const size = try file.getEndPos();
-    try std.testing.expect(size > 10 * 1024); // > 10 KB
-
-    std.debug.print("Pobrano {d} bajtów do {s}\n", .{ size, out_path });
-}
-
 pub fn toCString(allocator: std.mem.Allocator, s: []const u8) ![:0]u8 {
     const dup = try allocator.allocSentinel(u8, s.len, 0);
     @memcpy(dup, s);

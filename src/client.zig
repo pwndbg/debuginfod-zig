@@ -1,13 +1,15 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const log = @import("log.zig");
+const user_agent = @import("user_agent.zig");
 
 pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
 
 pub const DebuginfodEnvs = struct {
     // required
     urls: [][]const u8 = &.{},
-    cache_path: []const u8 = &[_]u8{},
+    cache_path: []const u8 = &.{},
+    user_agent: []const u8 = &.{},
 
     // optional
     fetch_timeout: ?usize = null,
@@ -20,6 +22,7 @@ pub const DebuginfodEnvs = struct {
     fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator) !void {
         self.urls = try getUrls(allocator);
         self.cache_path = try getCachePath(allocator);
+        self.user_agent = try user_agent.getUserAgent(allocator);
         // self.fetch_headers = try getHeadersFromFile(allocator);
 
         if(std.posix.getenv("DEBUGINFOD_TIMEOUT")) |val| {
@@ -172,13 +175,13 @@ pub const DebuginfodContext = struct {
         ctx.* = .{
             .allocator = allocator,
         };
-        try (&ctx.envs).init(allocator);
+        try ctx.envs.init(allocator);
         return ctx;
     }
 
     pub fn deinit(self: *DebuginfodContext) void {
         const allocator = self.allocator;
-        (&self.envs).deinit(allocator);
+        self.envs.deinit(allocator);
         allocator.destroy(self);
         self.* = undefined;
     }
@@ -340,8 +343,10 @@ pub const DebuginfodContext = struct {
         var req = try client.request( .GET, try std.Uri.parse(url), .{
             .redirect_behavior = @enumFromInt(3),
             .keep_alive = true,
-            // todo: send user-agent
             .headers = .{
+                .user_agent = .{
+                    .override = self.envs.user_agent,
+                },
             },
             // todo: send extra headers
             .extra_headers = &.{},

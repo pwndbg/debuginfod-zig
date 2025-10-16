@@ -49,12 +49,17 @@ pub fn build(b: *std.Build) !void {
         linkage = .dynamic;
     }
 
+    const zon_module = b.createModule(.{
+        .root_source_file = b.path("build.zig.zon"),
+    });
+
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/binding.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    lib_mod.addImport("build.zig.zon", zon_module);
 
     const include = b.addInstallHeaderFile(b.path("upstream/debuginfod.h"), "elfutils/debuginfod.h");
     const pkgconfig = try generatePkgconfig(b, version);
