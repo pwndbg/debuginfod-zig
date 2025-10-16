@@ -106,7 +106,6 @@ pub const DebuginfodEnvs = struct {
 
     fn getUrls(allocator: std.mem.Allocator) ![][]const u8 {
         var list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-
         if (std.posix.getenv("DEBUGINFOD_URLS")) |val| {
             // Split by spaces
             var it = std.mem.tokenizeAny(u8, val, " ");
@@ -114,9 +113,6 @@ pub const DebuginfodEnvs = struct {
                 if (url.len == 0) continue;
                 try list.append(allocator, try allocator.dupe(u8, url));
             }
-        }
-        if (list.items.len == 0) {
-            try list.append(allocator, "https://debuginfod.elfutils.org");
         }
         return try list.toOwnedSlice(allocator);
     }
