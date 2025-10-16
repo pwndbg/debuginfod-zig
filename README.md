@@ -31,15 +31,14 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 - DEBUGINFOD_MAXSIZE
 - DEBUGINFOD_VERBOSE
 - DEBUGINFOD_PROGRESS
+- DEBUGINFOD_HEADERS_FILE
 
 ## ENV's not-implemented:
 - DEBUGINFOD_TIMEOUT (hard)
 - DEBUGINFOD_RETRY_LIMIT (easy)
-- DEBUGINFOD_HEADERS_FILE (medium)
 - DEBUGINFOD_IMA_CERT_PATH (hard?)
 
 ## What is missing:
 - auto-cleanup old debuginfo files
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
-- func debuginfod_add_http_header

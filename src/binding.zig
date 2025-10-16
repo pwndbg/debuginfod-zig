@@ -178,20 +178,19 @@ export fn debuginfod_add_http_header(
     handle: ?*client.DebuginfodContext,
     header: [*c]const c_char,
 ) c_int {
-    const ctx = handle orelse return -1;
+    const ctx = handle orelse return CErrUnknown;
 
     const header_casted: []const u8 = std.mem.span(@as([*c]const u8, @ptrCast(header)));
-    const colon_idx = std.mem.indexOf(u8, header_casted, ": ") orelse {
-        return -1;
+    const header_trimmed = std.mem.trim(u8, header_casted, " \t\r\n");
+    const colon_idx = std.mem.indexOf(u8, header_trimmed, ": ") orelse {
+        return CErrUnknown;
     };
-    const out = std.http.Header{
+    ctx.addRequestHeader(.{
         .name = header_casted[0..colon_idx],
         .value = header_casted[colon_idx+2..],
+    }) catch {
+        return CErrUnknown;
     };
-    _ = out;
-    _ = ctx;
-    // todo: append header
-
     return 0;
 }
 

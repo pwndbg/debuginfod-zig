@@ -17,13 +17,13 @@ pub const DebuginfodEnvs = struct {
     fetch_maxtime: ?usize = null,
     fetch_retry_limit: usize = 2,
     fetch_progress_to_stderr: bool = false,
-    fetch_headers: []const std.http.Header = &.{},
+    fetch_headers: ?[]const std.http.Header = null,
 
     fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator) !void {
         self.urls = try getUrls(allocator);
         self.cache_path = try getCachePath(allocator);
         self.user_agent = try user_agent.getUserAgent(allocator);
-        // self.fetch_headers = try getHeadersFromFile(allocator);
+        self.fetch_headers = try getHeadersFromFile(allocator);
 
         if(std.posix.getenv("DEBUGINFOD_TIMEOUT")) |val| {
             self.fetch_timeout = try std.fmt.parseInt(usize, val, 10);
@@ -48,14 +48,55 @@ pub const DebuginfodEnvs = struct {
         }
         allocator.free(self.urls);
         allocator.free(self.cache_path);
+        if(self.fetch_headers) |items| {
+            for (items) |item| {
+                allocator.free(item.name);
+                allocator.free(item.value);
+            }
+            allocator.free(items);
+        }
         self.* = undefined;
     }
 
-    // fn getHeadersFromFile(allocator: std.mem.Allocator) ![]const std.http.Header {
-    //     const headers_file = std.posix.getenv("DEBUGINFOD_HEADERS_FILE") orelse return .{};
-    //     // TODO: implement
-    //
-    // }
+    fn getHeadersFromFile(allocator: std.mem.Allocator) !?[]const std.http.Header {
+        const headers_file = std.posix.getenv("DEBUGINFOD_HEADERS_FILE") orelse {
+            return null;
+        };
+        var file = std.fs.cwd().openFile(headers_file, .{}) catch |err| {
+            log.warn("getHeadersFromFile openFile,err: {}", .{err});
+            return null;
+        };
+        defer file.close();
+
+        var buf: [8192]u8 = undefined;
+        var reader = file.reader(&buf);
+        var list = try std.ArrayList(std.http.Header).initCapacity(allocator, 0);
+
+        while (true) {
+            const line = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+                std.io.Reader.DelimiterError.EndOfStream => break,
+                else => |e| {
+                    log.warn("getHeadersFromFile takeDelimiterExclusive,err: {}", .{e});
+                    break;
+                },
+            };
+
+            const header_trimmed = std.mem.trim(u8, line, " \t\r\n");
+            if (header_trimmed.len == 0) continue;
+
+            const colon_idx = std.mem.indexOf(u8, header_trimmed, ": ") orelse {
+                log.warn("getHeadersFromFile invalid header: '{s}'", .{header_trimmed});
+                continue;
+            };
+
+            const header = std.http.Header{
+                .name = try allocator.dupe(u8, header_trimmed[0..colon_idx]),
+                .value = try allocator.dupe(u8, header_trimmed[colon_idx+2..]),
+            };
+            try list.append(allocator, header);
+        }
+        return try list.toOwnedSlice(allocator);
+    }
 
     // fn getImaCert(allocator: std.mem.Allocator) !void {
     //     _ = allocator;
@@ -91,6 +132,8 @@ pub const DebuginfodEnvs = struct {
         if (std.posix.getenv("HOME")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
         }
+
+        log.warn("getCachePath erro, envs DEBUGINFOD_CACHE_PATH,XDG_CACHE_HOME,HOME any of them must be not empty", .{});
         return error.EmptyCachePathEnv;
     }
 };
@@ -158,15 +201,16 @@ pub const DebuginfodResponeHeaders = struct {
 
 pub const DebuginfodContext = struct {
     allocator: std.mem.Allocator,
+    current_request_headers: std.array_list.Aligned(std.http.Header, null),
 
     envs: DebuginfodEnvs = .{},
-    add_headers: []const std.http.Header = &[_]std.http.Header{},
     progress_fn: ?*ProgressFnType = null,
 
-    // variables accessable only in `onFetchProgress`
+    // start variables safe accessable only in `onFetchProgress`
     current_userdata: ?*anyopaque = null,
     current_url: ?[:0]const u8 = null,
     current_response_headers: ?*DebuginfodResponeHeaders = null,
+    // end variables safe accessable only in `onFetchProgress`
 
     pub fn init(allocator: std.mem.Allocator) !*DebuginfodContext {
         const ctx = try allocator.create(DebuginfodContext);
@@ -174,16 +218,42 @@ pub const DebuginfodContext = struct {
 
         ctx.* = .{
             .allocator = allocator,
+            .current_request_headers = try std.ArrayList(std.http.Header).initCapacity(allocator, 0),
         };
         try ctx.envs.init(allocator);
+
+        if(ctx.envs.fetch_headers) |headers| {
+            for(headers) |header| {
+                try ctx.addRequestHeader(header);
+            }
+        }
         return ctx;
     }
 
     pub fn deinit(self: *DebuginfodContext) void {
         const allocator = self.allocator;
         self.envs.deinit(allocator);
+
+        for(self.current_request_headers.items) |item| {
+            allocator.free(item.name);
+            allocator.free(item.value);
+        }
+        self.current_request_headers.deinit(allocator);
+
         allocator.destroy(self);
         self.* = undefined;
+    }
+
+    pub fn addRequestHeader(self: *DebuginfodContext, header: std.http.Header) !void {
+        const name = try self.allocator.dupe(u8, header.name);
+        errdefer self.allocator.free(name);
+        const value = try self.allocator.dupe(u8, header.value);
+        errdefer self.allocator.free(value);
+
+        try self.current_request_headers.append(self.allocator, .{
+            .name = name,
+            .value = value,
+        });
     }
 
     pub fn findDebuginfo(self: *DebuginfodContext, build_id: []u8) ![]u8 {
@@ -348,8 +418,7 @@ pub const DebuginfodContext = struct {
                     .override = self.envs.user_agent,
                 },
             },
-            // todo: send extra headers
-            .extra_headers = &.{},
+            .extra_headers = self.current_request_headers.items,
             .privileged_headers = &.{},
         });
         defer req.deinit();
