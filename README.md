@@ -42,3 +42,4 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 - auto-cleanup old debuginfo files
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
+- http connection is cancelable only after successful connect

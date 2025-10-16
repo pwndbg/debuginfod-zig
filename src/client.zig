@@ -116,8 +116,7 @@ pub const DebuginfodEnvs = struct {
             }
         }
         if (list.items.len == 0) {
-            // TODO: default const?
-            try list.append(allocator, "https://debuginfod.debian.net");
+            try list.append(allocator, "https://debuginfod.elfutils.org");
         }
         return try list.toOwnedSlice(allocator);
     }
