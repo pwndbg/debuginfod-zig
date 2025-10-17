@@ -69,6 +69,10 @@ pub fn build(b: *std.Build) !void {
         .root_module = lib_mod,
         .version = version,
     });
+    if(linkage == .static) {
+        lib.bundle_compiler_rt = true;
+        lib.pie = true;
+    }
     lib.setVersionScript(b.path("upstream/libdebuginfod.map"));
     lib.step.dependOn(&include.step);
     lib.step.dependOn(&pkgconfig.step);
