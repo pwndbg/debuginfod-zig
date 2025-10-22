@@ -6,7 +6,7 @@ includedir=${prefix}/include
 Name: debuginfod
 Description: libdebuginfod rewritten in Zig - a drop-in replacement for GNU's libdebuginfod
 Version: @VERSION@
-URL: https://github.com/patryk4815/debuginfod-zig
+URL: https://github.com/pwndbg/debuginfod-zig
 
 Libs: -L${libdir} -ldebuginfod
 Cflags: -I${includedir}
