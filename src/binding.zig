@@ -142,6 +142,19 @@ export fn debuginfod_find_section(
     return debuginfod_find_common(handle, build_id, build_id_len, section, .Section, path_out_c);
 }
 
+export fn debuginfod_find_metadata(
+    handle: ?*client.DebuginfodContext,
+    key: [*c]const c_char,
+    value: [*c]const c_char,
+    path: [*c][*c]c_char,
+) c_int {
+    _ = handle;
+    _ = key;
+    _ = value;
+    _ = path;
+    return CErrUnknown;
+}
+
 export fn debuginfod_set_user_data(
     handle: ?*client.DebuginfodContext,
     value: ?*anyopaque,

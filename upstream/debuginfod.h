@@ -89,6 +89,11 @@ int debuginfod_find_section (debuginfod_client *client,
 			     const char *section,
 			     char **path);
 
+int debuginfod_find_metadata (debuginfod_client *client,
+							  const char *key,
+							  const char* value,
+							  char **path);
+
 typedef int (*debuginfod_progressfn_t)(debuginfod_client *c, long a, long b);
 void debuginfod_set_progressfn(debuginfod_client *c,
 			       debuginfod_progressfn_t fn);
