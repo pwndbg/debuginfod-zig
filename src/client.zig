@@ -19,25 +19,25 @@ pub const DebuginfodEnvs = struct {
     fetch_progress_to_stderr: bool = false,
     fetch_headers: ?[]const std.http.Header = null,
 
-    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator) !void {
-        self.urls = try getUrls(allocator);
-        self.cache_path = try getCachePath(allocator);
+    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, penvs: std.process.EnvMap) !void {
+        self.urls = try getUrls(allocator, penvs);
+        self.cache_path = try getCachePath(allocator, penvs);
         self.user_agent = try user_agent.getUserAgent(allocator);
-        self.fetch_headers = try getHeadersFromFile(allocator);
+        self.fetch_headers = try getHeadersFromFile(allocator, penvs);
 
-        if(std.posix.getenv("DEBUGINFOD_TIMEOUT")) |val| {
+        if(penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
             self.fetch_timeout = try std.fmt.parseInt(usize, val, 10);
         }
-        if(std.posix.getenv("DEBUGINFOD_MAXTIME")) |val| {
+        if(penvs.get("DEBUGINFOD_MAXTIME")) |val| {
             self.fetch_maxtime = try std.fmt.parseInt(usize, val, 10);
         }
-        if(std.posix.getenv("DEBUGINFOD_MAXSIZE")) |val| {
+        if(penvs.get("DEBUGINFOD_MAXSIZE")) |val| {
             self.fetch_maxsize = try std.fmt.parseInt(usize, val, 10);
         }
-        if(std.posix.getenv("DEBUGINFOD_RETRY_LIMIT")) |val| {
+        if(penvs.get("DEBUGINFOD_RETRY_LIMIT")) |val| {
             self.fetch_retry_limit = try std.fmt.parseInt(usize, val, 10);
         }
-        if(std.posix.getenv("DEBUGINFOD_PROGRESS") != null) {
+        if(penvs.get("DEBUGINFOD_PROGRESS") != null) {
             self.fetch_progress_to_stderr = true;
         }
     }
@@ -58,8 +58,8 @@ pub const DebuginfodEnvs = struct {
         self.* = undefined;
     }
 
-    fn getHeadersFromFile(allocator: std.mem.Allocator) !?[]const std.http.Header {
-        const headers_file = std.posix.getenv("DEBUGINFOD_HEADERS_FILE") orelse {
+    fn getHeadersFromFile(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !?[]const std.http.Header {
+        const headers_file = penvs.get("DEBUGINFOD_HEADERS_FILE") orelse {
             return null;
         };
         var file = std.fs.cwd().openFile(headers_file, .{}) catch |err| {
@@ -98,22 +98,22 @@ pub const DebuginfodEnvs = struct {
         return try list.toOwnedSlice(allocator);
     }
 
-    // fn getImaCert(allocator: std.mem.Allocator) !void {
+    // fn getImaCert(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !void {
     //     _ = allocator;
-    //     // const env8 = std.posix.getenv("DEBUGINFOD_IMA_CERT_PATH");
+    //     // const env8 = penvs.get("DEBUGINFOD_IMA_CERT_PATH");
     //     // TODO: implement
     // }
 
-    fn getUrls(allocator: std.mem.Allocator) ![][]const u8 {
+    fn getUrls(allocator: std.mem.Allocator, penvs: std.process.EnvMap) ![][]const u8 {
         var list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-        if (std.posix.getenv("DEBUGINFOD_URLS")) |val| {
+        if (penvs.get("DEBUGINFOD_URLS")) |val| {
             // Split by spaces
             var it = std.mem.tokenizeAny(u8, val, " ");
             while (it.next()) |url| {
                 if (url.len == 0) continue;
 
                 // allow only http:// and https:// urls
-                if (!(std.mem.startsWith(u8, url, "https://") and std.mem.startsWith(u8, url, "http://"))) {
+                if (!(std.mem.startsWith(u8, url, "https://") or std.mem.startsWith(u8, url, "http://"))) {
                     continue;
                 }
 
@@ -123,14 +123,14 @@ pub const DebuginfodEnvs = struct {
         return try list.toOwnedSlice(allocator);
     }
 
-    fn getCachePath(allocator: std.mem.Allocator) ![]const u8 {
-        if (std.posix.getenv("DEBUGINFOD_CACHE_PATH")) |cache_path| {
+    fn getCachePath(allocator: std.mem.Allocator, penvs: std.process.EnvMap) ![]const u8 {
+        if (penvs.get("DEBUGINFOD_CACHE_PATH")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path});
         }
-        if (std.posix.getenv("XDG_CACHE_HOME")) |cache_path| {
+        if (penvs.get("XDG_CACHE_HOME")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path, "debuginfod_client"});
         }
-        if (std.posix.getenv("HOME")) |cache_path| {
+        if (penvs.get("HOME")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
         }
 
@@ -138,6 +138,23 @@ pub const DebuginfodEnvs = struct {
         return error.EmptyCachePathEnv;
     }
 };
+
+test "DebuginfodEnvs" {
+    const allocator = std.testing.allocator;
+
+    var penvs = try std.process.getEnvMap(allocator);
+    defer penvs.deinit();
+
+    try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1.com http://test2.com invalidbar");
+
+    var denvs = DebuginfodEnvs{};
+    try denvs.init(allocator, penvs);
+    defer denvs.deinit(allocator);
+
+    try std.testing.expect(denvs.urls.len == 2);
+    try std.testing.expectEqualStrings("https://test1.com", denvs.urls[0]);
+    try std.testing.expectEqualStrings("http://test2.com", denvs.urls[1]);
+}
 
 pub const DebuginfodResponeHeaders = struct {
     size: ?usize = null,
@@ -217,11 +234,14 @@ pub const DebuginfodContext = struct {
         const ctx = try allocator.create(DebuginfodContext);
         errdefer allocator.destroy(ctx);
 
+        var penvs = try std.process.getEnvMap(allocator);
+        defer penvs.deinit();
+
         ctx.* = .{
             .allocator = allocator,
             .current_request_headers = try std.ArrayList(std.http.Header).initCapacity(allocator, 0),
         };
-        try ctx.envs.init(allocator);
+        try ctx.envs.init(allocator, penvs);
 
         if(ctx.envs.fetch_headers) |headers| {
             for(headers) |header| {
