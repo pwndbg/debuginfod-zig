@@ -111,6 +111,12 @@ pub const DebuginfodEnvs = struct {
             var it = std.mem.tokenizeAny(u8, val, " ");
             while (it.next()) |url| {
                 if (url.len == 0) continue;
+
+                // allow only http:// and https:// urls
+                if (!(std.mem.startsWith(u8, url, "https://") and std.mem.startsWith(u8, url, "http://"))) {
+                    continue;
+                }
+
                 try list.append(allocator, try allocator.dupe(u8, url));
             }
         }
