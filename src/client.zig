@@ -530,20 +530,131 @@ pub const DebuginfodContext = struct {
     }
 };
 
-test "DebuginfodContext" {
+pub fn testStartServer(file_blob: []const u8) !struct {
+    thread: std.Thread,
+    port: u16,
+} {
+    const address = try std.net.Address.parseIp4("127.0.0.1", 0);
+    var socket = try address.listen(.{});
+    errdefer socket.deinit();
+    const port = socket.listen_address.getPort();
+
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(server2: std.net.Server, file_blob2: []const u8) void {
+            var server = server2;
+            defer server.deinit();
+
+            // handle only single conn
+            while (true) {
+                std.debug.print("wating in loop\n", .{});
+
+                const conn = server.accept() catch |err| {
+                    std.debug.print("Test HTTP Server accept error: {}\n", .{err});
+                    break;
+                };
+                std.debug.print("accepted in loop\n", .{});
+
+                testHandleConnection(conn, file_blob2);
+                break;
+            }
+
+            std.debug.print("exit http loop\n", .{});
+        }
+    }.run, .{socket, file_blob});
+
+    return .{ .thread = thread, .port = port };
+}
+
+fn testHandleConnection(conn: std.net.Server.Connection, file_blob: []const u8) void {
+    defer conn.stream.close();
+
+    var req_buf: [2048]u8 = undefined;
+    var conn_reader = conn.stream.reader(&req_buf);
+    var conn_writer = conn.stream.writer(&req_buf);
+
+    var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+    while (true) {
+        var req = http_server.receiveHead() catch |err| {
+            std.debug.print("Test HTTP Server error: {}\n", .{err});
+            return;
+        };
+        testHandleRequest(&req, file_blob) catch |err| {
+            std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
+            req.respond("server error", .{ .status = .internal_server_error }) catch {};
+            return;
+        };
+    }
+}
+
+fn testHandleRequest(req: *std.http.Server.Request, file_blob: []const u8) !void {
+    var send_buffer: [4096]u8 = undefined;
+    var res = try req.respondStreaming(&send_buffer, .{
+        .content_length = file_blob.len,
+        .respond_options = .{
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "application/octet-stream" },
+            },
+        },
+    });
+    try res.writer.writeAll(file_blob);
+    try res.writer.flush();
+    try res.end();
+}
+
+test "DebuginfodContext no exists servers" {
     const allocator = std.testing.allocator;
 
-    var penvs = try std.process.getEnvMap(allocator);
-    defer penvs.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-    try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1-notexist http://test2-notexist invalidbar");
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try std.process.getEnvMap(allocator);
+        defer penvs.deinit();
+        try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1-notexist http://test2-notexist invalidbar");
 
-    const ctx = try DebuginfodContext.init(allocator, penvs);
+        const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+        defer allocator.free(tmp_path);
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
     defer ctx.deinit();
 
-    try std.testing.expect(ctx.envs.urls.len == 2);
+    try std.testing.expectEqual(2, ctx.envs.urls.len);
     try std.testing.expectEqualStrings("https://test1-notexist", ctx.envs.urls[0]);
     try std.testing.expectEqualStrings("http://test2-notexist", ctx.envs.urls[1]);
 
-    try std.testing.expectError(error.UnknownHostName, ctx.findDebuginfo("5c9d8b11851246b7766f0a7b3042a8988faad435"));
+    try std.testing.expectError(error.UnknownHostName, ctx.findDebuginfo("ffffff11851246b7766f0a7b3042a8988faad435"));
+}
+
+test "DebuginfodContext real server" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const debughttp = try testStartServer("debug content");
+    defer debughttp.thread.join();
+
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try std.process.getEnvMap(allocator);
+        defer penvs.deinit();
+
+        const DEBUGINFOD_URLS = try std.fmt.allocPrint(allocator, "invalidfoo https://test1-notexist http://test2-notexist http://127.0.0.1:{d} invalidbar", .{debughttp.port});
+        defer allocator.free(DEBUGINFOD_URLS);
+        try penvs.put("DEBUGINFOD_URLS", DEBUGINFOD_URLS);
+
+        const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+        defer allocator.free(tmp_path);
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(3, ctx.envs.urls.len);
+
+    const filepath = try ctx.findDebuginfo("5c9d8b11851246b7766f0a7b3042a8988faad435");
+    defer allocator.free(filepath);
 }
