@@ -48,6 +48,7 @@ pub const DebuginfodEnvs = struct {
         }
         allocator.free(self.urls);
         allocator.free(self.cache_path);
+        allocator.free(self.user_agent);
         if(self.fetch_headers) |items| {
             for (items) |item| {
                 allocator.free(item.name);
