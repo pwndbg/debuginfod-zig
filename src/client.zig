@@ -275,7 +275,7 @@ pub const DebuginfodContext = struct {
         });
     }
 
-    pub fn findDebuginfo(self: *DebuginfodContext, build_id: []u8) ![]u8 {
+    pub fn findDebuginfo(self: *DebuginfodContext, build_id: []const u8) ![]u8 {
         log.info("findDebuginfo {s}", .{build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "debuginfo"});
@@ -292,7 +292,7 @@ pub const DebuginfodContext = struct {
         return local_path;
     }
 
-    pub fn findExecutable(self: *DebuginfodContext, build_id: []u8) ![]u8 {
+    pub fn findExecutable(self: *DebuginfodContext, build_id: []const u8) ![]u8 {
         log.info("findExecutable {s}", .{build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "executable"});
@@ -309,7 +309,7 @@ pub const DebuginfodContext = struct {
         return local_path;
     }
 
-    pub fn findSource(self: *DebuginfodContext, build_id: []u8, source_path: []const u8) ![]u8 {
+    pub fn findSource(self: *DebuginfodContext, build_id: []const u8, source_path: []const u8) ![]u8 {
         log.info("findSource {s} {s}", .{build_id, source_path});
 
         const source_path_encoded = try helpers.urlencodePart(self.allocator, source_path);
@@ -335,7 +335,7 @@ pub const DebuginfodContext = struct {
         return local_path;
     }
 
-    pub fn findSection(self: *DebuginfodContext, build_id: []u8, section: []const u8) ![]u8 {
+    pub fn findSection(self: *DebuginfodContext, build_id: []const u8, section: []const u8) ![]u8 {
         log.info("findSection {s} {s}", .{build_id, section});
 
         const section_escaped = try helpers.escapeFilename(self.allocator, section);
@@ -358,12 +358,12 @@ pub const DebuginfodContext = struct {
         return local_path;
     }
 
-    pub fn findSectionWithFallback(self: *DebuginfodContext, build_id: []u8, section: []const u8) ![]u8 {
+    pub fn findSectionWithFallback(self: *DebuginfodContext, build_id: []const u8, section: []const u8) ![]u8 {
         // TODO: fallback to "findExecutable" + extract from elf, if server don't implement section?
         return try self.findSection(build_id, section);
     }
 
-    fn getTempFilepath(allocator: std.mem.Allocator, local_path: []u8) ![]u8 {
+    fn getTempFilepath(allocator: std.mem.Allocator, local_path: []const u8) ![]u8 {
         const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
         // todo: security? random filename?
         const tmp_basename = try std.mem.concat(allocator, u8, &.{".tmp.", std.fs.path.basename(local_path)});
@@ -372,7 +372,7 @@ pub const DebuginfodContext = struct {
         return try std.fs.path.join(allocator, &.{local_dirname, tmp_basename});
     }
 
-    fn fetchFullOptions(self: *DebuginfodContext, url_path: []u8, local_path: []u8) !void {
+    fn fetchFullOptions(self: *DebuginfodContext, url_path: []const u8, local_path: []const u8) !void {
         var lastErr: anyerror = error.ErrorNotFound;
 
         for(self.envs.urls) |url| {
@@ -389,7 +389,7 @@ pub const DebuginfodContext = struct {
         return lastErr;
     }
 
-    fn fetchAsFile(self: *DebuginfodContext, url: [:0]u8, local_path: []u8) !void {
+    fn fetchAsFile(self: *DebuginfodContext, url: [:0]const u8, local_path: []const u8) !void {
         const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
         const local_path_tmp = try getTempFilepath(self.allocator, local_path);
         defer self.allocator.free(local_path_tmp);
@@ -413,7 +413,7 @@ pub const DebuginfodContext = struct {
         try std.fs.renameAbsolute(local_path_tmp, local_path);
     }
 
-    fn fetch(self: *DebuginfodContext, url: [:0]u8, response_writer: *std.Io.Writer) !void {
+    fn fetch(self: *DebuginfodContext, url: [:0]const u8, response_writer: *std.Io.Writer) !void {
         log.info("fetch {s}", .{url});
 
         self.current_url = url;
@@ -529,3 +529,21 @@ pub const DebuginfodContext = struct {
         }
     }
 };
+
+test "DebuginfodContext" {
+    const allocator = std.testing.allocator;
+
+    var penvs = try std.process.getEnvMap(allocator);
+    defer penvs.deinit();
+
+    try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1-notexist http://test2-notexist invalidbar");
+
+    const ctx = try DebuginfodContext.init(allocator, penvs);
+    defer ctx.deinit();
+
+    try std.testing.expect(ctx.envs.urls.len == 2);
+    try std.testing.expectEqualStrings("https://test1-notexist", ctx.envs.urls[0]);
+    try std.testing.expectEqualStrings("http://test2-notexist", ctx.envs.urls[1]);
+
+    try std.testing.expectError(error.UnknownHostName, ctx.findDebuginfo("5c9d8b11851246b7766f0a7b3042a8988faad435"));
+}
