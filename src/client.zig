@@ -260,7 +260,6 @@ pub const DebuginfodContext = struct {
         self.current_request_headers.deinit(allocator);
 
         allocator.destroy(self);
-        self.* = undefined;
     }
 
     pub fn addRequestHeader(self: *DebuginfodContext, header: std.http.Header) !void {
