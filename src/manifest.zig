@@ -6,5 +6,5 @@ pub const version: []const u8 = manifest.version;
 
 test "manifest" {
     try std.testing.expectEqualStrings("debuginfod-zig", name);
-    try std.testing.expectEqualStrings("0.188.0", version);
+    try std.testing.expectEqualStrings("0.193.0", version);
 }
