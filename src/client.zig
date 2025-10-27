@@ -231,12 +231,9 @@ pub const DebuginfodContext = struct {
     current_response_headers: ?*DebuginfodResponeHeaders = null,
     // end variables safe accessable only in `onFetchProgress`
 
-    pub fn init(allocator: std.mem.Allocator) !*DebuginfodContext {
+    pub fn init(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !*DebuginfodContext {
         const ctx = try allocator.create(DebuginfodContext);
         errdefer allocator.destroy(ctx);
-
-        var penvs = try std.process.getEnvMap(allocator);
-        defer penvs.deinit();
 
         ctx.* = .{
             .allocator = allocator,

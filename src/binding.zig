@@ -91,7 +91,13 @@ fn debuginfod_find_common(
 }
 
 export fn debuginfod_begin() ?*client.DebuginfodContext {
-    const ctx = client.DebuginfodContext.init(std.heap.c_allocator) catch |err| {
+    var penvs = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
+        log.warn("debuginfod_begin getEnvMap err: {}", .{err});
+        return null;
+    };
+    defer penvs.deinit();
+
+    const ctx = client.DebuginfodContext.init(std.heap.c_allocator, penvs) catch |err| {
         log.warn("debuginfod_begin init err: {}", .{err});
         return null;
     };
