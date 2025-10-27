@@ -67,12 +67,12 @@ pub fn build(b: *std.Build) !void {
         .linkage = linkage,
         .name = "debuginfod",
         .root_module = lib_mod,
-        .version = version,
     });
     if(linkage == .static) {
         lib.bundle_compiler_rt = true;
         lib.pie = true;
     }
+    lib.out_filename = "libdebuginfod.so.1";
     lib.setVersionScript(b.path("upstream/libdebuginfod.map"));
     lib.step.dependOn(&include.step);
     lib.step.dependOn(&pkgconfig.step);

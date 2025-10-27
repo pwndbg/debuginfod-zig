@@ -1,5 +1,5 @@
 ## Compatibility
-- `debuginfod-zig` is compatible with GNU `debuginfod` version `0.193`
+- `debuginfod-zig` is compatible with GNU `debuginfod` version `0.194`
 
 ## Why?
 `debuginfod-zig` was created as a lightweight, portable alternative to GNU's `debuginfod`.
@@ -24,6 +24,15 @@ zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe
 zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 ```
 
+# How to replace GDB debuginfod with this repo?
+```
+git clone https://github.com/pwndbg/debuginfod-zig
+cd debuginfod-zig
+zig build -Doptimize=ReleaseSafe -Dlinkage=dynamic
+cp ./zig-out/lib/libdebuginfo.so.0.188.0 /usr/lib64/libdebuginfod.so.1
+```
+> NOTE: please download zig 0.15.1 - https://ziglang.org/download/
+
 ## ENV's implemented:
 - DEBUGINFOD_URLS
 - DEBUGINFOD_CACHE_PATH
@@ -39,6 +48,7 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 - DEBUGINFOD_IMA_CERT_PATH (hard?)
 
 ## What is missing:
+- missing func debuginfod_find_metadata
 - auto-cleanup old debuginfo files
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
