@@ -67,6 +67,7 @@ pub fn build(b: *std.Build) !void {
         .linkage = linkage,
         .name = "debuginfod",
         .root_module = lib_mod,
+        .version = version,
     });
     if(linkage == .static) {
         lib.bundle_compiler_rt = true;
