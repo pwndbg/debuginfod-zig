@@ -29,9 +29,11 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 git clone https://github.com/pwndbg/debuginfod-zig
 cd debuginfod-zig
 zig build -Doptimize=ReleaseSafe -Dlinkage=dynamic
-cp ./zig-out/lib/libdebuginfo.so.0.188.0 /usr/lib64/libdebuginfod.so.1
+cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 ```
-> NOTE: please download zig 0.15.1 - https://ziglang.org/download/
+> NOTE1: please download zig 0.15.1 - https://ziglang.org/download/
+
+> NOTE2: `/usr/lib64/libdebuginfod.so.1` path depends on your distribution
 
 ## ENV's implemented:
 - DEBUGINFOD_URLS

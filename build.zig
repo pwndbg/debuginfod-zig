@@ -73,7 +73,6 @@ pub fn build(b: *std.Build) !void {
         lib.bundle_compiler_rt = true;
         lib.pie = true;
     }
-    lib.out_filename = "libdebuginfod.so.1";
     lib.setVersionScript(b.path("upstream/libdebuginfod.map"));
     lib.step.dependOn(&include.step);
     lib.step.dependOn(&pkgconfig.step);
