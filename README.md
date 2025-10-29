@@ -1,8 +1,8 @@
-## Compatibility
-- `debuginfod-zig` is compatible with GNU `debuginfod` version `0.194`
+# debuginfod-zig
+
+`debuginfod-zig` is a lightweight, portable alternative to GNU's `debuginfod`. It is compatible with GNU debuginfod version 0.194.
 
 ## Why?
-`debuginfod-zig` was created as a lightweight, portable alternative to GNU's `debuginfod`.
 
 While GNU `debuginfod` works well only on Linux, it comes with several limitations that make it less practical in other environments or for static builds.
 
