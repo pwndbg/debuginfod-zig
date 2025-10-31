@@ -541,12 +541,10 @@ pub fn testStartServer(io: std.Io, file_blob: []const u8) !struct {
     thread: std.Thread,
     port: u16,
 } {
-    const port: u16 = 41337;
-    const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
+    const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
     var socket = try address.listen(io, .{});
     errdefer socket.deinit(io);
-    // socket.socket.address
-    // const port = socket.listen_address.getPort();
+    const port: u16 = socket.socket.address.getPort();
 
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(io2: std.Io, server2: std.Io.net.Server, file_blob2: []const u8) void {
