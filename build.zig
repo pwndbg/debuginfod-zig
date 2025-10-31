@@ -9,6 +9,10 @@ pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Buil
         @panic("Prefix must be absolute!");
     }
 
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
     const input_file = try std.fs.cwd().openFile("upstream/libdebuginfod.pc.in", .{});
     defer input_file.close();
 
@@ -16,7 +20,7 @@ pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Buil
     defer aw.deinit();
 
     var buf: [0]u8 = undefined;
-    var reader = input_file.reader(&buf);
+    var reader = input_file.reader(io, &buf);
     _ = try reader.interface.stream(&aw.writer, .unlimited);
 
     var text = try aw.toOwnedSlice();

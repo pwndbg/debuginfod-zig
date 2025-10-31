@@ -69,8 +69,12 @@ pub const DebuginfodEnvs = struct {
         };
         defer file.close();
 
+        var threaded: std.Io.Threaded = .init(allocator);
+        defer threaded.deinit();
+        const io = threaded.io();
+
         var buf: [8192]u8 = undefined;
-        var reader = file.reader(&buf);
+        var reader = file.reader(io, &buf);
         var list = try std.ArrayList(std.http.Header).initCapacity(allocator, 0);
 
         while (true) {
@@ -417,8 +421,13 @@ pub const DebuginfodContext = struct {
         self.current_url = url;
         defer self.current_url = null;
 
+        var threaded: std.Io.Threaded = .init(self.allocator);
+        defer threaded.deinit();
+        const io = threaded.io();
+
         var client = std.http.Client{
             .allocator = self.allocator,
+            .io = io,
         };
         defer client.deinit();
 
@@ -482,7 +491,7 @@ pub const DebuginfodContext = struct {
         const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
 
         var current_writed_bytes: usize = 0;
-        const writer_start_at = std.time.timestamp();
+        const writer_start_at = try std.time.Instant.now();
 
         var progress: std.Progress.Node = undefined;
         const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
@@ -505,8 +514,8 @@ pub const DebuginfodContext = struct {
                 return error.DownloadMaxSizeExceed;
             }
             if(self.envs.fetch_maxtime) |maxtime| {
-                const diff = std.time.timestamp() - writer_start_at;
-                if(diff < 0) return error.YourClockIsShaking;
+                const loop_at = try std.time.Instant.now();
+                const diff = loop_at.since(writer_start_at);
                 if(diff > maxtime) return error.DownloadMaxTimeExceed;
             }
 
@@ -528,49 +537,51 @@ pub const DebuginfodContext = struct {
     }
 };
 
-pub fn testStartServer(file_blob: []const u8) !struct {
+pub fn testStartServer(io: std.Io, file_blob: []const u8) !struct {
     thread: std.Thread,
     port: u16,
 } {
-    const address = try std.net.Address.parseIp4("127.0.0.1", 0);
-    var socket = try address.listen(.{});
-    errdefer socket.deinit();
-    const port = socket.listen_address.getPort();
+    const port: u16 = 41337;
+    const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
+    var socket = try address.listen(io, .{});
+    errdefer socket.deinit(io);
+    // socket.socket.address
+    // const port = socket.listen_address.getPort();
 
     const thread = try std.Thread.spawn(.{}, struct {
-        fn run(server2: std.net.Server, file_blob2: []const u8) void {
+        fn run(io2: std.Io, server2: std.Io.net.Server, file_blob2: []const u8) void {
             var server = server2;
-            defer server.deinit();
+            defer server.deinit(io2);
 
             // handle only single conn
             while (true) {
                 std.debug.print("wating in loop\n", .{});
 
-                const conn = server.accept() catch |err| {
+                const conn = server.accept(io2) catch |err| {
                     std.debug.print("Test HTTP Server accept error: {}\n", .{err});
                     break;
                 };
                 std.debug.print("accepted in loop\n", .{});
 
-                testHandleConnection(conn, file_blob2);
+                testHandleConnection(io2, conn, file_blob2);
                 break;
             }
 
             std.debug.print("exit http loop\n", .{});
         }
-    }.run, .{socket, file_blob});
+    }.run, .{io, socket, file_blob});
 
     return .{ .thread = thread, .port = port };
 }
 
-fn testHandleConnection(conn: std.net.Server.Connection, file_blob: []const u8) void {
-    defer conn.stream.close();
+fn testHandleConnection(io: std.Io, stream: std.Io.net.Stream, file_blob: []const u8) void {
+    defer stream.close(io);
 
     var req_buf: [2048]u8 = undefined;
-    var conn_reader = conn.stream.reader(&req_buf);
-    var conn_writer = conn.stream.writer(&req_buf);
+    var conn_reader = stream.reader(io, &req_buf);
+    var conn_writer = stream.writer(io, &req_buf);
 
-    var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+    var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
     while (true) {
         var req = http_server.receiveHead() catch |err| {
             std.debug.print("Test HTTP Server error: {}\n", .{err});
@@ -631,7 +642,12 @@ test "DebuginfodContext real server" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const debughttp = try testStartServer("debug content");
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const contentInFile = "debug content";
+    const debughttp = try testStartServer(io, contentInFile);
     defer debughttp.thread.join();
 
     var ctx: *DebuginfodContext = undefined;
@@ -655,4 +671,14 @@ test "DebuginfodContext real server" {
 
     const filepath = try ctx.findDebuginfo("5c9d8b11851246b7766f0a7b3042a8988faad435");
     defer allocator.free(filepath);
+
+    const debugfile = try std.fs.cwd().openFile(filepath, .{});
+    defer debugfile.close();
+
+    var buf: [1024]u8 = undefined;
+    var reader = debugfile.reader(io, &buf);
+    const filecontent = try reader.interface.readAlloc(allocator, contentInFile.len);
+    defer allocator.free(filecontent);
+
+    try std.testing.expectEqualStrings(contentInFile, filecontent);
 }

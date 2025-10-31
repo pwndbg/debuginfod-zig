@@ -25,8 +25,12 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
     if (file) |f| {
         defer f.close();
 
+        var threaded: std.Io.Threaded = .init(allocator);
+        defer threaded.deinit();
+        const io = threaded.io();
+
         var buf: [1024]u8 = undefined;
-        var reader = f.reader(&buf);
+        var reader = f.reader(io, &buf);
 
         while (true) {
             const line = try reader.interface.takeDelimiter('\n') orelse {
@@ -78,8 +82,12 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
     if (file) |f| {
         defer f.close();
 
+        var threaded: std.Io.Threaded = .init(allocator);
+        defer threaded.deinit();
+        const io = threaded.io();
+
         var buf: [1024]u8 = undefined;
-        var reader = f.reader(&buf);
+        var reader = f.reader(io, &buf);
 
         while (true) {
             const key = parsePlistLine(&reader.interface, "<key>", "</key>") catch |err| switch (err) {
