@@ -29,9 +29,8 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
         var reader = f.reader(&buf);
 
         while (true) {
-            const line = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
-                std.io.Reader.DelimiterError.EndOfStream => break,
-                else => |e| return e,
+            const line = try reader.interface.takeDelimiter('\n') orelse {
+                break;
             };
             const trimmed = std.mem.trim(u8, line, " \t\r\n");
             const eq_index = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
@@ -56,7 +55,9 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
 }
 
 fn parsePlistLine(reader: *std.Io.Reader, prefix: []const u8, suffix: []const u8) ![]const u8 {
-    const line = try reader.takeDelimiterExclusive('\n');
+    const line = try reader.takeDelimiter('\n') orelse {
+        return error.EOF;
+    };
     const line_trimmed = std.mem.trim(u8, line, " \t\r\n");
     if(!(std.mem.startsWith(u8, line_trimmed, prefix) and std.mem.endsWith(u8, line_trimmed, suffix))) {
         return error.LineIsInvalid;
@@ -82,13 +83,13 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
 
         while (true) {
             const key = parsePlistLine(&reader.interface, "<key>", "</key>") catch |err| switch (err) {
-                std.io.Reader.DelimiterError.EndOfStream => break,
+                error.EOF => break,
                 error.LineIsInvalid => continue,
                 else => |e| return e,
             };
             if (std.mem.eql(u8, key, "ProductVersion")) {
                 const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
-                    std.io.Reader.DelimiterError.EndOfStream => break,
+                    error.EOF => break,
                     error.LineIsInvalid => continue,
                     else => |e| return e,
                 };
@@ -96,7 +97,7 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
             }
             else if (std.mem.eql(u8, key, "ProductBuildVersion")) {
                 const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
-                    std.io.Reader.DelimiterError.EndOfStream => break,
+                    error.EOF => break,
                     error.LineIsInvalid => continue,
                     else => |e| return e,
                 };

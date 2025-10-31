@@ -74,12 +74,11 @@ pub const DebuginfodEnvs = struct {
         var list = try std.ArrayList(std.http.Header).initCapacity(allocator, 0);
 
         while (true) {
-            const line = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
-                std.io.Reader.DelimiterError.EndOfStream => break,
-                else => |e| {
-                    log.warn("getHeadersFromFile takeDelimiterExclusive,err: {}", .{e});
-                    break;
-                },
+            const line = reader.interface.takeDelimiter('\n') catch |err| {
+                log.warn("getHeadersFromFile takeDelimiter,err: {}", .{err});
+                break;
+            } orelse {
+                break;
             };
 
             const header_trimmed = std.mem.trim(u8, line, " \t\r\n");
