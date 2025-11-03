@@ -19,11 +19,11 @@ pub const DebuginfodEnvs = struct {
     fetch_progress_to_stderr: bool = false,
     fetch_headers: ?[]const std.http.Header = null,
 
-    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, penvs: std.process.EnvMap) !void {
+    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.EnvMap) !void {
         self.urls = try getUrls(allocator, penvs);
         self.cache_path = try getCachePath(allocator, penvs);
-        self.user_agent = try user_agent.getUserAgent(allocator);
-        self.fetch_headers = try getHeadersFromFile(allocator, penvs);
+        self.user_agent = try user_agent.getUserAgent(allocator, io);
+        self.fetch_headers = try getHeadersFromFile(allocator, io, penvs);
 
         if(penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
             self.fetch_timeout = try std.fmt.parseInt(usize, val, 10);
@@ -59,7 +59,7 @@ pub const DebuginfodEnvs = struct {
         self.* = undefined;
     }
 
-    fn getHeadersFromFile(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !?[]const std.http.Header {
+    fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.EnvMap) !?[]const std.http.Header {
         const headers_file = penvs.get("DEBUGINFOD_HEADERS_FILE") orelse {
             return null;
         };
@@ -68,10 +68,6 @@ pub const DebuginfodEnvs = struct {
             return null;
         };
         defer file.close();
-
-        var threaded: std.Io.Threaded = .init(allocator);
-        defer threaded.deinit();
-        const io = threaded.io();
 
         var buf: [8192]u8 = undefined;
         var reader = file.reader(io, &buf);
@@ -145,6 +141,9 @@ pub const DebuginfodEnvs = struct {
 
 test "DebuginfodEnvs" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     var penvs = try std.process.getEnvMap(allocator);
     defer penvs.deinit();
@@ -152,7 +151,7 @@ test "DebuginfodEnvs" {
     try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1.com http://test2.com invalidbar");
 
     var denvs = DebuginfodEnvs{};
-    try denvs.init(allocator, penvs);
+    try denvs.init(allocator, io, penvs);
     defer denvs.deinit(allocator);
 
     try std.testing.expect(denvs.urls.len == 2);
@@ -238,11 +237,15 @@ pub const DebuginfodContext = struct {
         const ctx = try allocator.create(DebuginfodContext);
         errdefer allocator.destroy(ctx);
 
+        var threaded: std.Io.Threaded = .init(allocator);
+        defer threaded.deinit();
+        const io = threaded.io();
+
         ctx.* = .{
             .allocator = allocator,
             .current_request_headers = try std.ArrayList(std.http.Header).initCapacity(allocator, 0),
         };
-        try ctx.envs.init(allocator, penvs);
+        try ctx.envs.init(allocator, io, penvs);
 
         if(ctx.envs.fetch_headers) |headers| {
             for(headers) |header| {
@@ -392,6 +395,9 @@ pub const DebuginfodContext = struct {
     }
 
     fn fetchAsFile(self: *DebuginfodContext, url: [:0]const u8, local_path: []const u8) !void {
+        self.current_url = url;
+        defer self.current_url = null;
+
         const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
         const local_path_tmp = try getTempFilepath(self.allocator, local_path);
         defer self.allocator.free(local_path_tmp);
@@ -405,25 +411,83 @@ pub const DebuginfodContext = struct {
             });
             defer file.close();
 
-            // var buffer: [64 * 1024]u8 = undefined; // BUG: https://github.com/ziglang/zig/pull/25235
-            var buffer: [0]u8 = undefined;
+            var buffer: [64 * 1024]u8 = undefined;
             var writer = file.writer(&buffer);
 
-            try self.fetch(url, &writer.interface);
+            var threaded: std.Io.Threaded = .init(self.allocator);
+            defer threaded.deinit();
+            const io = threaded.io();
+
+            var writed_bytes: std.atomic.Value(usize) = .init(0);
+            var total_bytes: std.atomic.Value(usize) = .init(0);
+            var fetch_finished: std.atomic.Value(bool) = .init(false);
+
+            var ffetch = try io.concurrent(DebuginfodContext.fetch, .{self, io, url, &writer.interface, &writed_bytes, &total_bytes, &fetch_finished});
+            defer ffetch.cancel(io) catch {};
+
+            var loop = io.async(DebuginfodContext.loopProgress, .{self, io, &writed_bytes, &total_bytes, &fetch_finished});
+            defer loop.cancel(io) catch {};
+
+            try loop.await(io);
         }
 
         try std.fs.renameAbsolute(local_path_tmp, local_path);
     }
 
-    fn fetch(self: *DebuginfodContext, url: [:0]const u8, response_writer: *std.Io.Writer) !void {
+    fn loopProgress(self: *DebuginfodContext, io: std.Io, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
+        const fetch_start_at = try std.time.Instant.now();
+
+        while (!fetch_finished.load(.acquire)) {
+            const current_writed_bytes = writed_bytes.load(.acquire);
+            const current_total_bytes = total_bytes.load(.acquire);
+
+            // todo: fix timeout
+            // if(self.envs.fetch_timeout != null) {
+            //     return error.DownloadTimeoutExceed;
+            // }
+            if(self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
+                return error.DownloadMaxSizeExceed;
+            }
+            if(self.envs.fetch_maxtime) |maxtime| {
+                const loop_at = try std.time.Instant.now();
+                const diff = loop_at.since(fetch_start_at);
+                if(diff > maxtime) return error.DownloadMaxTimeExceed;
+            }
+            try self.onFetchProgress(current_writed_bytes, current_total_bytes);
+
+            try io.sleep(.fromMilliseconds(100), .awake);
+        }
+
+        // var progress: std.Progress.Node = undefined;
+        // const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
+        // if(show_progress_stderr) {
+        //     progress = std.Progress.start(.{
+        //         .root_name = url,
+        //         .estimated_total_items = total_bytes orelse 0,  // todo: in loop?
+        //     });
+        // }
+        // defer if(show_progress_stderr) progress.end();
+        //
+        // if(self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
+        //     return error.DownloadMaxSizeExceed;
+        // }
+        // if(self.envs.fetch_maxtime) |maxtime| {
+        //     const loop_at = try std.time.Instant.now();
+        //     const diff = loop_at.since(writer_start_at);
+        //     if(diff > maxtime) return error.DownloadMaxTimeExceed;
+        // }
+        //
+        // if(show_progress_stderr) {
+        //     progress.setCompletedItems(current_writed_bytes);
+        // } else {
+        //     try self.onFetchProgress(current_writed_bytes, file_size);
+        // }
+    }
+
+    fn fetch(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, response_writer: *std.Io.Writer, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
+        defer fetch_finished.store(true, .release);
+
         log.info("fetch {s}", .{url});
-
-        self.current_url = url;
-        defer self.current_url = null;
-
-        var threaded: std.Io.Threaded = .init(self.allocator);
-        defer threaded.deinit();
-        const io = threaded.io();
 
         var client = std.http.Client{
             .allocator = self.allocator,
@@ -434,7 +498,6 @@ pub const DebuginfodContext = struct {
         const redirect_buffer: []u8 = try client.allocator.alloc(u8, 8 * 1024);
         defer client.allocator.free(redirect_buffer);
 
-        // TODO: connect timeout? setsocketopt
         // TODO: self.envs.fetch_retry_limit; (bo moze byc status code 500? lub conn err)
         var req = try client.request( .GET, try std.Uri.parse(url), .{
             .redirect_behavior = @enumFromInt(3),
@@ -467,14 +530,15 @@ pub const DebuginfodContext = struct {
         self.current_response_headers = &response_headers;
         defer self.current_response_headers = null;
 
-        var file_size: ?usize = null;
+        var file_size: usize = 0;
         if(response_headers.size) |size| {
             file_size = size;
         } else if(response.head.content_encoding == .identity and response.head.content_length != null) {
             file_size = response.head.content_length.?;
         }
+        total_bytes.store(file_size, .release);
 
-        if(self.envs.fetch_maxsize != null and file_size != null and self.envs.fetch_maxsize.? < file_size.?) {
+        if(self.envs.fetch_maxsize != null and file_size > 0 and self.envs.fetch_maxsize.? < file_size) {
             return error.DownloadMaxSizeExceed;
         }
 
@@ -490,46 +554,18 @@ pub const DebuginfodContext = struct {
         var decompress: std.http.Decompress = undefined;
         const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
 
-        var current_writed_bytes: usize = 0;
-        const writer_start_at = try std.time.Instant.now();
-
-        var progress: std.Progress.Node = undefined;
-        const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
-        if(show_progress_stderr) {
-            progress = std.Progress.start(.{
-                .root_name = url,
-                .estimated_total_items = file_size orelse 0,
-            });
-        }
-        defer if(show_progress_stderr) progress.end();
-
         while (true) {
-            current_writed_bytes += reader.stream(response_writer, .unlimited) catch |err| switch (err) {
+            const current_writed_bytes = reader.stream(response_writer, .unlimited) catch |err| switch (err) {
                 error.EndOfStream => break,
-                error.ReadFailed => return response.bodyErr().?,
                 else => |e| return e,
             };
-
-            if(self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
-                return error.DownloadMaxSizeExceed;
-            }
-            if(self.envs.fetch_maxtime) |maxtime| {
-                const loop_at = try std.time.Instant.now();
-                const diff = loop_at.since(writer_start_at);
-                if(diff > maxtime) return error.DownloadMaxTimeExceed;
-            }
-
-            if(show_progress_stderr) {
-                progress.setCompletedItems(current_writed_bytes);
-            } else {
-                try self.onFetchProgress(current_writed_bytes, file_size);
-            }
+            _ = writed_bytes.fetchAdd(current_writed_bytes, .release);
         }
     }
 
-    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) !void {
+    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: usize) !void {
         if(self.progress_fn) |callback| {
-            const download_was_canceled = callback(self, @intCast(current), @intCast(total orelse 0)) != 0;
+            const download_was_canceled = callback(self, @intCast(current), @intCast(total)) != 0;
             if (download_was_canceled) {
                 return error.DownloadInterrupted;
             }

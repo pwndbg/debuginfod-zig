@@ -13,7 +13,7 @@ pub const OsRelease = struct {
     }
 };
 
-fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
+fn parseLinuxOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const []const u8) !OsRelease {
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
@@ -24,10 +24,6 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
     }
     if (file) |f| {
         defer f.close();
-
-        var threaded: std.Io.Threaded = .init(allocator);
-        defer threaded.deinit();
-        const io = threaded.io();
 
         var buf: [1024]u8 = undefined;
         var reader = f.reader(io, &buf);
@@ -70,7 +66,7 @@ fn parsePlistLine(reader: *std.Io.Reader, prefix: []const u8, suffix: []const u8
     return value;
 }
 
-fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
+fn parseMacosOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const []const u8) !OsRelease {
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
@@ -81,10 +77,6 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
     }
     if (file) |f| {
         defer f.close();
-
-        var threaded: std.Io.Threaded = .init(allocator);
-        defer threaded.deinit();
-        const io = threaded.io();
 
         var buf: [1024]u8 = undefined;
         var reader = f.reader(io, &buf);
@@ -116,16 +108,19 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
     return output;
 }
 
-fn getOsRelease(allocator: std.mem.Allocator) !OsRelease {
+fn getOsRelease(allocator: std.mem.Allocator, io: std.Io) !OsRelease {
     switch (builtin.os.tag) {
-        .linux => return parseLinuxOsRelease(allocator, &.{ "/etc/os-release", "/usr/lib/os-release"}),
-        .macos => return parseMacosOsRelease(allocator, &.{ "/System/Library/CoreServices/SystemVersion.plist"}),
+        .linux => return parseLinuxOsRelease(allocator, io, &.{ "/etc/os-release", "/usr/lib/os-release"}),
+        .macos => return parseMacosOsRelease(allocator, io, &.{ "/System/Library/CoreServices/SystemVersion.plist"}),
         else => return .{},
     }
 }
 
 test "parseLinuxOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const fake_data =
         \\DOCUMENTATION_URL="https://nixos.org/learn.html"
@@ -151,7 +146,7 @@ test "parseLinuxOsRelease parses basic os-release file" {
         .sub_path = "os-release",
     });
 
-    var out = try parseLinuxOsRelease(allocator, &.{file_path});
+    var out = try parseLinuxOsRelease(allocator, io, &.{file_path});
     defer out.deinit(allocator);
 
     try std.testing.expect(out.id != null);
@@ -163,6 +158,9 @@ test "parseLinuxOsRelease parses basic os-release file" {
 
 test "parseMacosOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const fake_data =
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -197,16 +195,16 @@ test "parseMacosOsRelease parses basic os-release file" {
         .sub_path = "SystemVersion.plist",
     });
 
-    var out = try parseMacosOsRelease(allocator, &.{file_path});
+    var out = try parseMacosOsRelease(allocator, io, &.{file_path});
     defer out.deinit(allocator);
 
     try std.testing.expect(out.version != null);
     try std.testing.expectEqualStrings("26.0", out.version.?);
 }
 
-pub fn getUserAgent(allocator: std.mem.Allocator) ![]u8 {
+pub fn getUserAgent(allocator: std.mem.Allocator, io: std.Io) ![]u8 {
     const uts = std.posix.uname();
-    var osr = try getOsRelease(allocator);
+    var osr = try getOsRelease(allocator, io);
     defer osr.deinit(allocator);
 
     return try std.fmt.allocPrint(
@@ -225,8 +223,11 @@ pub fn getUserAgent(allocator: std.mem.Allocator) ![]u8 {
 
 test "getUserAgent" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const out = try getUserAgent(allocator);
+    const out = try getUserAgent(allocator, io);
     defer allocator.free(out);
 
     std.debug.print("out={s}\n", .{out});
