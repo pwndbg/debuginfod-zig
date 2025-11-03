@@ -12,7 +12,7 @@ pub const DebuginfodEnvs = struct {
     user_agent: []const u8 = &.{},
 
     // optional
-    fetch_timeout: ?usize = null,
+    fetch_timeout: ?usize = 90,
     fetch_maxsize: ?usize = null,
     fetch_maxtime: ?usize = null,
     fetch_retry_limit: usize = 2,
@@ -26,13 +26,16 @@ pub const DebuginfodEnvs = struct {
         self.fetch_headers = try getHeadersFromFile(allocator, io, penvs);
 
         if (penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
-            self.fetch_timeout = try std.fmt.parseInt(usize, val, 10);
+            const d = try std.fmt.parseInt(isize, val, 10);
+            self.fetch_timeout = if (d <= 0) null else @intCast(d);
         }
         if (penvs.get("DEBUGINFOD_MAXTIME")) |val| {
-            self.fetch_maxtime = try std.fmt.parseInt(usize, val, 10);
+            const d = try std.fmt.parseInt(usize, val, 10);
+            self.fetch_maxtime = if (d == 0) null else d;
         }
         if (penvs.get("DEBUGINFOD_MAXSIZE")) |val| {
-            self.fetch_maxsize = try std.fmt.parseInt(usize, val, 10);
+            const d = try std.fmt.parseInt(usize, val, 10);
+            self.fetch_maxsize = if (d == 0) null else d;
         }
         if (penvs.get("DEBUGINFOD_RETRY_LIMIT")) |val| {
             self.fetch_retry_limit = try std.fmt.parseInt(usize, val, 10);
@@ -425,10 +428,8 @@ pub const DebuginfodContext = struct {
             var ffetch = try io.concurrent(DebuginfodContext.fetch, .{ self, io, url, &writer.interface, &writed_bytes, &total_bytes, &fetch_finished });
             defer ffetch.cancel(io) catch {};
 
-            var loop = try io.concurrent(DebuginfodContext.loopProgress, .{ self, io, &writed_bytes, &total_bytes, &fetch_finished });
-            defer loop.cancel(io) catch {};
-
-            try loop.await(io);
+            try self.loopProgress(io, &writed_bytes, &total_bytes, &fetch_finished);
+            try ffetch.await(io);
         }
 
         try std.fs.renameAbsolute(local_path_tmp, local_path);
@@ -440,18 +441,17 @@ pub const DebuginfodContext = struct {
         while (!fetch_finished.load(.acquire)) {
             const current_writed_bytes = writed_bytes.load(.acquire);
             const current_total_bytes = total_bytes.load(.acquire);
+            const loop_at = try std.time.Instant.now();
+            const diff = loop_at.since(fetch_start_at);
 
-            // todo: fix timeout
-            // if(self.envs.fetch_timeout != null) {
-            //     return error.DownloadTimeoutExceed;
-            // }
+            if (self.envs.fetch_timeout != null and current_writed_bytes < 100_000 and diff > self.envs.fetch_timeout.?) {
+                return error.DownloadTimeoutExceed;
+            }
             if (self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
                 return error.DownloadMaxSizeExceed;
             }
-            if (self.envs.fetch_maxtime) |maxtime| {
-                const loop_at = try std.time.Instant.now();
-                const diff = loop_at.since(fetch_start_at);
-                if (diff > maxtime) return error.DownloadMaxTimeExceed;
+            if (self.envs.fetch_maxtime != null and diff > self.envs.fetch_maxtime.?) {
+                return error.DownloadMaxTimeExceed;
             }
             try self.onFetchProgress(current_writed_bytes, current_total_bytes);
 
@@ -486,6 +486,7 @@ pub const DebuginfodContext = struct {
 
     fn fetch(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, response_writer: *std.Io.Writer, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
         defer fetch_finished.store(true, .release);
+        defer response_writer.flush() catch {};
 
         log.info("fetch {s}", .{url});
 
@@ -498,7 +499,6 @@ pub const DebuginfodContext = struct {
         const redirect_buffer: []u8 = try client.allocator.alloc(u8, 8 * 1024);
         defer client.allocator.free(redirect_buffer);
 
-        // TODO: self.envs.fetch_retry_limit; (bo moze byc status code 500? lub conn err)
         var req = try client.request(.GET, try std.Uri.parse(url), .{
             .redirect_behavior = @enumFromInt(3),
             .keep_alive = true,
@@ -591,8 +591,10 @@ pub fn testStartServer(io: std.Io, file_blob: []const u8, queue: *std.Io.Queue(u
         };
         std.debug.print("accepted in loop\n", .{});
 
-        try testHandleConnection(io, conn, file_blob);
-        break;
+        testHandleConnection(io, conn, file_blob) catch |err| switch (err) {
+            error.HttpConnectionClosing => break,
+            else => |e| return e,
+        };
     }
 
     std.debug.print("exit http loop\n", .{});
@@ -607,10 +609,12 @@ fn testHandleConnection(io: std.Io, stream: std.Io.net.Stream, file_blob: []cons
 
     var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
     while (true) {
+        std.debug.print("receiveHead start\n", .{});
         var req = http_server.receiveHead() catch |err| {
             std.debug.print("Test HTTP Server error: {}\n", .{err});
             return err;
         };
+        std.debug.print("receiveHead end\n", .{});
         testHandleRequest(&req, file_blob) catch |err| {
             std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
             req.respond("server error", .{ .status = .internal_server_error }) catch {};
@@ -705,9 +709,7 @@ test "DebuginfodContext real server" {
     defer debugfile.close();
 
     var buf: [1024]u8 = undefined;
-    var reader = debugfile.reader(io, &buf);
-    const filecontent = try reader.interface.readAlloc(allocator, contentInFile.len);
-    defer allocator.free(filecontent);
+    const n = try debugfile.read(&buf);
 
-    try std.testing.expectEqualStrings(contentInFile, filecontent);
+    try std.testing.expectEqualStrings(contentInFile, buf[0..n]);
 }
