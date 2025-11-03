@@ -7,8 +7,8 @@ pub const OsRelease = struct {
     id: ?[]const u8 = null,
 
     pub fn deinit(self: *OsRelease, allocator: std.mem.Allocator) void {
-        if(self.id) |val| allocator.free(val);
-        if(self.version) |val| allocator.free(val);
+        if (self.id) |val| allocator.free(val);
+        if (self.version) |val| allocator.free(val);
         self.* = undefined;
     }
 };
@@ -41,8 +41,7 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const 
 
             if (output.id == null and std.mem.eql(u8, key, "ID")) {
                 output.id = try allocator.dupe(u8, value);
-            }
-            else if (output.version == null and std.mem.eql(u8, key, "VERSION_ID")) {
+            } else if (output.version == null and std.mem.eql(u8, key, "VERSION_ID")) {
                 output.version = try allocator.dupe(u8, value);
             }
 
@@ -59,10 +58,10 @@ fn parsePlistLine(reader: *std.Io.Reader, prefix: []const u8, suffix: []const u8
         return error.EOF;
     };
     const line_trimmed = std.mem.trim(u8, line, " \t\r\n");
-    if(!(std.mem.startsWith(u8, line_trimmed, prefix) and std.mem.endsWith(u8, line_trimmed, suffix))) {
+    if (!(std.mem.startsWith(u8, line_trimmed, prefix) and std.mem.endsWith(u8, line_trimmed, suffix))) {
         return error.LineIsInvalid;
     }
-    const value = line_trimmed[(prefix.len) .. (line_trimmed.len - suffix.len)];
+    const value = line_trimmed[(prefix.len)..(line_trimmed.len - suffix.len)];
     return value;
 }
 
@@ -94,8 +93,7 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const 
                     else => |e| return e,
                 };
                 output.version = try allocator.dupe(u8, value);
-            }
-            else if (std.mem.eql(u8, key, "ProductBuildVersion")) {
+            } else if (std.mem.eql(u8, key, "ProductBuildVersion")) {
                 const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
                     error.EOF => break,
                     error.LineIsInvalid => continue,
@@ -110,8 +108,8 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const 
 
 fn getOsRelease(allocator: std.mem.Allocator, io: std.Io) !OsRelease {
     switch (builtin.os.tag) {
-        .linux => return parseLinuxOsRelease(allocator, io, &.{ "/etc/os-release", "/usr/lib/os-release"}),
-        .macos => return parseMacosOsRelease(allocator, io, &.{ "/System/Library/CoreServices/SystemVersion.plist"}),
+        .linux => return parseLinuxOsRelease(allocator, io, &.{ "/etc/os-release", "/usr/lib/os-release" }),
+        .macos => return parseMacosOsRelease(allocator, io, &.{"/System/Library/CoreServices/SystemVersion.plist"}),
         else => return .{},
     }
 }
@@ -139,7 +137,7 @@ test "parseLinuxOsRelease parses basic os-release file" {
     defer tmp_dir.cleanup();
     const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_path);
-    const file_path = try std.fs.path.join(allocator, &.{tmp_path, "os-release"});
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "os-release" });
     defer allocator.free(file_path);
     try tmp_dir.dir.writeFile(.{
         .data = fake_data,
@@ -188,7 +186,7 @@ test "parseMacosOsRelease parses basic os-release file" {
     defer tmp_dir.cleanup();
     const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_path);
-    const file_path = try std.fs.path.join(allocator, &.{tmp_path, "SystemVersion.plist"});
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "SystemVersion.plist" });
     defer allocator.free(file_path);
     try tmp_dir.dir.writeFile(.{
         .data = fake_data,

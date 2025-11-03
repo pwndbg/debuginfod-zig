@@ -206,7 +206,7 @@ export fn debuginfod_add_http_header(
     };
     ctx.addRequestHeader(.{
         .name = header_casted[0..colon_idx],
-        .value = header_casted[colon_idx+2..],
+        .value = header_casted[colon_idx + 2 ..],
     }) catch {
         return CErrUnknown;
     };
