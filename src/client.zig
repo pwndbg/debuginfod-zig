@@ -428,15 +428,25 @@ pub const DebuginfodContext = struct {
             var ffetch = try io.concurrent(DebuginfodContext.fetch, .{ self, io, url, &writer.interface, &writed_bytes, &total_bytes, &fetch_finished });
             defer ffetch.cancel(io) catch {};
 
-            try self.loopProgress(io, &writed_bytes, &total_bytes, &fetch_finished);
+            try self.loopProgress(io, url, &writed_bytes, &total_bytes, &fetch_finished);
             try ffetch.await(io);
         }
 
         try std.fs.renameAbsolute(local_path_tmp, local_path);
     }
 
-    fn loopProgress(self: *DebuginfodContext, io: std.Io, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
+    fn loopProgress(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
+        const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
         const fetch_start_at = try std.time.Instant.now();
+
+        var progress: std.Progress.Node = undefined;
+        var progress_count_one = false;
+        if (show_progress_stderr) {
+            progress = std.Progress.start(.{
+                .root_name = url,
+            });
+        }
+        defer if (show_progress_stderr) progress.end();
 
         while (!fetch_finished.load(.acquire)) {
             const current_writed_bytes = writed_bytes.load(.acquire);
@@ -453,35 +463,19 @@ pub const DebuginfodContext = struct {
             if (self.envs.fetch_maxtime != null and diff > self.envs.fetch_maxtime.?) {
                 return error.DownloadMaxTimeExceed;
             }
-            try self.onFetchProgress(current_writed_bytes, current_total_bytes);
+
+            if (show_progress_stderr) {
+                if (current_total_bytes > 0 and !progress_count_one) {
+                    progress_count_one = true;
+                    progress.increaseEstimatedTotalItems(current_total_bytes);
+                }
+                progress.setCompletedItems(current_writed_bytes);
+            } else {
+                try self.onFetchProgress(current_writed_bytes, current_total_bytes);
+            }
 
             try io.sleep(.fromMilliseconds(100), .awake);
         }
-
-        // var progress: std.Progress.Node = undefined;
-        // const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
-        // if(show_progress_stderr) {
-        //     progress = std.Progress.start(.{
-        //         .root_name = url,
-        //         .estimated_total_items = total_bytes orelse 0,  // todo: in loop?
-        //     });
-        // }
-        // defer if(show_progress_stderr) progress.end();
-        //
-        // if(self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
-        //     return error.DownloadMaxSizeExceed;
-        // }
-        // if(self.envs.fetch_maxtime) |maxtime| {
-        //     const loop_at = try std.time.Instant.now();
-        //     const diff = loop_at.since(writer_start_at);
-        //     if(diff > maxtime) return error.DownloadMaxTimeExceed;
-        // }
-        //
-        // if(show_progress_stderr) {
-        //     progress.setCompletedItems(current_writed_bytes);
-        // } else {
-        //     try self.onFetchProgress(current_writed_bytes, file_size);
-        // }
     }
 
     fn fetch(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, response_writer: *std.Io.Writer, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
