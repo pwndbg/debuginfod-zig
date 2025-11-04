@@ -31,7 +31,7 @@ cd debuginfod-zig
 zig build -Doptimize=ReleaseSafe -Dlinkage=dynamic
 cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 ```
-> NOTE1: please download zig 0.15.1 - https://ziglang.org/download/
+> NOTE1: please download zig 0.16.0 - https://ziglang.org/download/
 
 > NOTE2: `/usr/lib64/libdebuginfod.so.1` path depends on your distribution
 
@@ -43,10 +43,10 @@ cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 - DEBUGINFOD_VERBOSE
 - DEBUGINFOD_PROGRESS
 - DEBUGINFOD_HEADERS_FILE
+- DEBUGINFOD_TIMEOUT
+- DEBUGINFOD_RETRY_LIMIT
 
 ## ENV's not-implemented:
-- DEBUGINFOD_TIMEOUT (hard)
-- DEBUGINFOD_RETRY_LIMIT (easy)
 - DEBUGINFOD_IMA_CERT_PATH (hard?)
 
 ## What is missing:
