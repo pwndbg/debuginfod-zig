@@ -44,10 +44,10 @@ cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 - DEBUGINFOD_PROGRESS
 - DEBUGINFOD_HEADERS_FILE
 - DEBUGINFOD_TIMEOUT
-- DEBUGINFOD_RETRY_LIMIT
 
 ## ENV's not-implemented:
 - DEBUGINFOD_IMA_CERT_PATH (hard?)
+- DEBUGINFOD_RETRY_LIMIT
 
 ## What is missing:
 - missing func debuginfod_find_metadata
