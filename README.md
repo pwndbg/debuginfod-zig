@@ -30,6 +30,9 @@ git clone https://github.com/pwndbg/debuginfod-zig
 cd debuginfod-zig
 zig build -Doptimize=ReleaseSafe -Dlinkage=dynamic
 cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
+
+# OR use env `LD_PRELOAD`
+LD_PRELOAD=./zig-out/lib/libdebuginfod.so /usr/bin/gdb
 ```
 > NOTE1: please download zig 0.16.0 - https://ziglang.org/download/
 
