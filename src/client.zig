@@ -416,6 +416,7 @@ pub const DebuginfodContext = struct {
 
             var buffer: [64 * 1024]u8 = undefined;
             var writer = file.writer(&buffer);
+            defer writer.interface.flush() catch {};
 
             var threaded: std.Io.Threaded = .init(self.allocator);
             defer threaded.deinit();
@@ -452,7 +453,7 @@ pub const DebuginfodContext = struct {
             const current_writed_bytes = writed_bytes.load(.acquire);
             const current_total_bytes = total_bytes.load(.acquire);
             const loop_at = try std.time.Instant.now();
-            const diff = loop_at.since(fetch_start_at);
+            const diff = loop_at.since(fetch_start_at) / std.time.ns_per_s;
 
             if (self.envs.fetch_timeout != null and current_writed_bytes < 100_000 and diff > self.envs.fetch_timeout.?) {
                 return error.DownloadTimeoutExceed;
@@ -480,7 +481,7 @@ pub const DebuginfodContext = struct {
 
     fn fetch(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, response_writer: *std.Io.Writer, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
         defer fetch_finished.store(true, .release);
-        defer response_writer.flush() catch {};
+        // defer response_writer.flush() catch {};
 
         log.info("fetch {s}", .{url});
 
