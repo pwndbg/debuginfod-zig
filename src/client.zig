@@ -416,7 +416,6 @@ pub const DebuginfodContext = struct {
 
             var buffer: [64 * 1024]u8 = undefined;
             var writer = file.writer(&buffer);
-            defer writer.interface.flush() catch {};
 
             var threaded: std.Io.Threaded = .init(self.allocator);
             defer threaded.deinit();
@@ -481,7 +480,7 @@ pub const DebuginfodContext = struct {
 
     fn fetch(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, response_writer: *std.Io.Writer, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
         defer fetch_finished.store(true, .release);
-        // defer response_writer.flush() catch {};
+        defer response_writer.flush() catch {};
 
         log.info("fetch {s}", .{url});
 
