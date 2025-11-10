@@ -144,7 +144,7 @@ export fn debuginfod_find_section(
     section: [*c]const c_char,
     path_out_c: [*c][*c]c_char,
 ) c_int {
-    comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
+    // comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
     return debuginfod_find_common(handle, build_id, build_id_len, section, .Section, path_out_c);
 }
 

@@ -528,7 +528,7 @@ pub const DebuginfodContext = struct {
         if (response_headers.size) |size| {
             file_size = size;
         } else if (response.head.content_encoding == .identity and response.head.content_length != null) {
-            file_size = response.head.content_length.?;
+            file_size = @truncate(response.head.content_length.?);
         }
         total_bytes.store(file_size, .release);
 
