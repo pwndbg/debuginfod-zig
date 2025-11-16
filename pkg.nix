@@ -11,11 +11,14 @@
 let
   isCross = stdenv.buildPlatform.system != stdenv.targetPlatform.system;
   isSameOS = stdenv.buildPlatform.parsed.kernel.name == stdenv.targetPlatform.parsed.kernel.name;
+
+  glibcVersion = if stdenv.targetPlatform.isLoongArch64 then "2.36" else "2.28";
+
   zigTarget =
     if stdenv.targetPlatform.isLinux && stdenv.targetPlatform.is32bit then
-      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.family}-linux-${stdenv.targetPlatform.parsed.abi.name}.2.28"
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.family}-linux-${stdenv.targetPlatform.parsed.abi.name}.${glibcVersion}"
     else if stdenv.targetPlatform.isLinux then
-      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}.2.28"
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}.${glibcVersion}"
     else if stdenv.targetPlatform.isDarwin then
       "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-macos.${stdenv.targetPlatform.darwinSdkVersion}"
     else

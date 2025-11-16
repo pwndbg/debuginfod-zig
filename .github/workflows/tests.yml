@@ -18,7 +18,7 @@ jobs:
           packages.aarch64-linux.pkgsCross.riscv64.libdebuginfod-zig-static, # riscv64
           packages.aarch64-linux.pkgsCross.s390x.libdebuginfod-zig-static, # s390x
           packages.aarch64-linux.pkgsCross.powernv.libdebuginfod-zig-static, # ppc64le
-          packages.aarch64-linux.pkgsCross.ppc64.libdebuginfod-zig-static, # ppc64
+#          packages.aarch64-linux.pkgsCross.ppc64.libdebuginfod-zig-static, # ppc64, stdenv slow compilation
           packages.aarch64-linux.pkgsCross.loongarch64-linux.libdebuginfod-zig-static,  # loong64
         ]
     runs-on: ubuntu-24.04-arm  # aarch64-linux
