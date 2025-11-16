@@ -2,18 +2,24 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  zig_0_14,
+  pkgsBuildHost,
+  targetPackages,
 
   # Others
-  zigRequired,
-  flags,
+  flags ? [ ],
 }:
 let
-  target =
-    if stdenv.hostPlatform.isLinux then
-      "-Dtarget=native-linux-gnu.2.28"
+  isCross = stdenv.buildPlatform.system != stdenv.targetPlatform.system;
+  isSameOS = stdenv.buildPlatform.parsed.kernel.name == stdenv.targetPlatform.parsed.kernel.name;
+  zigTarget =
+    if stdenv.targetPlatform.isLinux && stdenv.targetPlatform.is32bit then
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.family}-linux-${stdenv.targetPlatform.parsed.abi.name}.2.28"
+    else if stdenv.targetPlatform.isLinux then
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}.2.28"
+    else if stdenv.targetPlatform.isDarwin then
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-macos.${stdenv.targetPlatform.darwinSdkVersion}"
     else
-      "-Dtarget=native-macos.${stdenv.hostPlatform.darwinSdkVersion}";
+      (throw "not supported target");
 in
 stdenv.mkDerivation {
   name = "debuginfod-zig";
@@ -21,12 +27,37 @@ stdenv.mkDerivation {
 
   src = ./.;
 
+  preBuild = ''
+    export ZIG_GLOBAL_CACHE_DIR=$TMPDIR
+  '';
+
   zigBuildFlags = [
-    target
+    zigTarget
   ]
   ++ flags;
 
+  postInstall =
+    let
+      ld =
+        if stdenv.targetPlatform.isLinux then
+          "$(echo ${targetPackages.stdenv.cc.bintools.dynamicLinker})"
+        else
+          "";
+      qemu =
+        if stdenv.targetPlatform.isLinux && isCross then
+          "${pkgsBuildHost.qemu-user}/bin/qemu-${stdenv.targetPlatform.qemuArch}"
+        else
+          "";
+    in
+    lib.optionalString isSameOS ''
+      echo "Starting tests..."
+      ${qemu} ${ld} $out/bin/test
+    '';
+
+  # Allow tests that bind or connect to localhost on macOS.
+  __darwinAllowLocalNetworking = true;
+
   nativeBuildInputs = [
-    (zig_0_14.hook.override { zig = zigRequired; })
+    pkgsBuildHost.dev_zig_0_16.hook
   ];
 }

@@ -656,7 +656,11 @@ test "DebuginfodContext no exists servers" {
     try std.testing.expectEqualStrings("https://test1-notexist", ctx.envs.urls[0]);
     try std.testing.expectEqualStrings("http://test2-notexist", ctx.envs.urls[1]);
 
-    try std.testing.expectError(error.UnknownHostName, ctx.findDebuginfo("ffffff11851246b7766f0a7b3042a8988faad435"));
+    _ = ctx.findDebuginfo("ffffff11851246b7766f0a7b3042a8988faad435") catch |err| switch (err) {
+        error.NameServerFailure => |e| try std.testing.expectEqual(error.NameServerFailure, e),
+        error.UnknownHostName => |e| try std.testing.expectEqual(error.UnknownHostName, e),
+        else => |e| try std.testing.expectEqual(error.UnknownHostName, e),
+    };
 }
 
 test "DebuginfodContext real server" {

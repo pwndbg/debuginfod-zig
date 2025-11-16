@@ -1,0 +1,56 @@
+name: Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  tests-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        attribute: [
+          packages.aarch64-linux.pkgsCross.armv7l-hf-multiplatform.libdebuginfod-zig-static  # arm32
+          packages.aarch64-linux.pkgsCross.aarch64-multiplatform.libdebuginfod-zig-static  # arm64
+          packages.aarch64-linux.pkgsCross.gnu32.libdebuginfod-zig-static # x86_32
+          packages.aarch64-linux.pkgsCross.gnu64.libdebuginfod-zig-static # x86_64
+          packages.aarch64-linux.pkgsCross.riscv64.libdebuginfod-zig-static # riscv64
+          packages.aarch64-linux.pkgsCross.s390x.libdebuginfod-zig-static # s390x
+          packages.aarch64-linux.pkgsCross.powernv.libdebuginfod-zig-static # ppc64le
+          packages.aarch64-linux.pkgsCross.ppc64.libdebuginfod-zig-static # ppc64
+          packages.aarch64-linux.pkgsCross.loongarch64-linux.libdebuginfod-zig-static  # loong64
+        ]
+    runs-on: ubuntu-24.04-arm  # aarch64-linux
+    timeout-minutes: 30
+    env:
+      TMPDIR: /tmp
+    steps:
+    - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9  # @v3
+    - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72  # @v30
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: build ${{ matrix.attribute }}
+      run: nix build '.#${{ matrix.attribute }}' -L --accept-flake-config -o result
+
+  tests-darwin:
+    strategy:
+      fail-fast: false
+      matrix:
+        attribute: [
+          packages.aarch64-darwin.static  # arm64
+          packages.x86_64-darwin.static  # x86_64
+        ]
+    runs-on: macos-15  # aarch64-darwin
+    timeout-minutes: 30
+    env:
+      TMPDIR: /tmp
+    steps:
+    - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9  # @v3
+    - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72  # @v30
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: build ${{ matrix.attribute }}
+      run: nix build '.#${{ matrix.attribute }}' -L --accept-flake-config -o result
