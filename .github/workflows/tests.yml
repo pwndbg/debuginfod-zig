@@ -11,15 +11,15 @@ jobs:
       fail-fast: false
       matrix:
         attribute: [
-          packages.aarch64-linux.pkgsCross.armv7l-hf-multiplatform.libdebuginfod-zig-static  # arm32
-          packages.aarch64-linux.pkgsCross.aarch64-multiplatform.libdebuginfod-zig-static  # arm64
-          packages.aarch64-linux.pkgsCross.gnu32.libdebuginfod-zig-static # x86_32
-          packages.aarch64-linux.pkgsCross.gnu64.libdebuginfod-zig-static # x86_64
-          packages.aarch64-linux.pkgsCross.riscv64.libdebuginfod-zig-static # riscv64
-          packages.aarch64-linux.pkgsCross.s390x.libdebuginfod-zig-static # s390x
-          packages.aarch64-linux.pkgsCross.powernv.libdebuginfod-zig-static # ppc64le
-          packages.aarch64-linux.pkgsCross.ppc64.libdebuginfod-zig-static # ppc64
-          packages.aarch64-linux.pkgsCross.loongarch64-linux.libdebuginfod-zig-static  # loong64
+          packages.aarch64-linux.pkgsCross.armv7l-hf-multiplatform.libdebuginfod-zig-static,  # arm32
+          packages.aarch64-linux.pkgsCross.aarch64-multiplatform.libdebuginfod-zig-static,  # arm64
+          packages.aarch64-linux.pkgsCross.gnu32.libdebuginfod-zig-static, # x86_32
+          packages.aarch64-linux.pkgsCross.gnu64.libdebuginfod-zig-static, # x86_64
+          packages.aarch64-linux.pkgsCross.riscv64.libdebuginfod-zig-static, # riscv64
+          packages.aarch64-linux.pkgsCross.s390x.libdebuginfod-zig-static, # s390x
+          packages.aarch64-linux.pkgsCross.powernv.libdebuginfod-zig-static, # ppc64le
+          packages.aarch64-linux.pkgsCross.ppc64.libdebuginfod-zig-static, # ppc64
+          packages.aarch64-linux.pkgsCross.loongarch64-linux.libdebuginfod-zig-static,  # loong64
         ]
     runs-on: ubuntu-24.04-arm  # aarch64-linux
     timeout-minutes: 30
@@ -39,8 +39,8 @@ jobs:
       fail-fast: false
       matrix:
         attribute: [
-          packages.aarch64-darwin.static  # arm64
-          packages.x86_64-darwin.static  # x86_64
+          packages.aarch64-darwin.static,  # arm64
+          packages.x86_64-darwin.static,  # x86_64
         ]
     runs-on: macos-15  # aarch64-darwin
     timeout-minutes: 30
