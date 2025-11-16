@@ -3,11 +3,15 @@ const manifest = @import("build.zig.zon");
 
 pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Build.Step.InstallFile {
     const allocator = b.allocator;
-    const version_str = try std.fmt.allocPrint(allocator, "{d}.{d}", .{version.major, version.minor});
+    const version_str = try std.fmt.allocPrint(allocator, "{d}.{d}", .{ version.major, version.minor });
     const absolute_prefix = b.install_prefix;
     if (!std.fs.path.isAbsolute(absolute_prefix)) {
         @panic("Prefix must be absolute!");
     }
+
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const input_file = try std.fs.cwd().openFile("upstream/libdebuginfod.pc.in", .{});
     defer input_file.close();
@@ -16,7 +20,7 @@ pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Buil
     defer aw.deinit();
 
     var buf: [0]u8 = undefined;
-    var reader = input_file.reader(&buf);
+    var reader = input_file.reader(io, &buf);
     _ = try reader.interface.stream(&aw.writer, .unlimited);
 
     var text = try aw.toOwnedSlice();
@@ -26,7 +30,7 @@ pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Buil
     text = try std.mem.replaceOwned(u8, allocator, text, "@VERSION@", version_str);
 
     const tmp_dir = b.makeTempPath();
-    const tmp_file = try std.fs.path.join(allocator, &.{tmp_dir, "libdebuginfod.pc"});
+    const tmp_file = try std.fs.path.join(allocator, &.{ tmp_dir, "libdebuginfod.pc" });
     const out_file = try std.fs.cwd().createFile(tmp_file, .{});
     defer out_file.close();
     try out_file.writeAll(text);
@@ -69,7 +73,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = lib_mod,
         .version = version,
     });
-    if(linkage == .static) {
+    if (linkage == .static) {
         lib.bundle_compiler_rt = true;
         lib.pie = true;
     }
@@ -82,7 +86,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = lib_mod,
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
+    b.installArtifact(lib_unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 }

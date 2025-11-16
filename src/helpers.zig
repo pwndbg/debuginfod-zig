@@ -8,7 +8,7 @@ pub fn build_id_to_hex(allocator: std.mem.Allocator, build_id: [*c]const u8, bui
     } else {
         // build_id is raw bytes
         const build_id_bytes = build_id[0..@as(usize, @intCast(build_id_len))];
-        const buf = try allocator.alloc(u8, build_id_bytes.len*2);
+        const buf = try allocator.alloc(u8, build_id_bytes.len * 2);
         _ = try std.fmt.bufPrint(buf, "{x}", .{build_id_bytes});
         return buf;
     }
@@ -29,7 +29,7 @@ test "build_id_to_hex works for hex string input" {
 test "build_id_to_hex works for raw bytes input" {
     const allocator = std.testing.allocator;
 
-    const raw_bytes = [_]u8{0x4a, 0x7c, 0x2f};
+    const raw_bytes = [_]u8{ 0x4a, 0x7c, 0x2f };
     const out = try build_id_to_hex(allocator, &raw_bytes[0], raw_bytes.len);
 
     std.debug.print("Raw bytes to hex output: {s}\n", .{out});
@@ -60,7 +60,7 @@ pub fn escapeFilename(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
             'A'...'Z', 'a'...'z', '0'...'9', '.', '-', '_' => src[ri],
             else => '#',
         };
-        if(ri == 0 or wi == 0) {
+        if (ri == 0 or wi == 0) {
             break;
         }
         wi -= 1;

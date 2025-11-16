@@ -7,13 +7,13 @@ pub const OsRelease = struct {
     id: ?[]const u8 = null,
 
     pub fn deinit(self: *OsRelease, allocator: std.mem.Allocator) void {
-        if(self.id) |val| allocator.free(val);
-        if(self.version) |val| allocator.free(val);
+        if (self.id) |val| allocator.free(val);
+        if (self.version) |val| allocator.free(val);
         self.* = undefined;
     }
 };
 
-fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
+fn parseLinuxOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const []const u8) !OsRelease {
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
@@ -26,12 +26,11 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
         defer f.close();
 
         var buf: [1024]u8 = undefined;
-        var reader = f.reader(&buf);
+        var reader = f.reader(io, &buf);
 
         while (true) {
-            const line = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
-                std.io.Reader.DelimiterError.EndOfStream => break,
-                else => |e| return e,
+            const line = try reader.interface.takeDelimiter('\n') orelse {
+                break;
             };
             const trimmed = std.mem.trim(u8, line, " \t\r\n");
             const eq_index = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
@@ -42,8 +41,7 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
 
             if (output.id == null and std.mem.eql(u8, key, "ID")) {
                 output.id = try allocator.dupe(u8, value);
-            }
-            else if (output.version == null and std.mem.eql(u8, key, "VERSION_ID")) {
+            } else if (output.version == null and std.mem.eql(u8, key, "VERSION_ID")) {
                 output.version = try allocator.dupe(u8, value);
             }
 
@@ -56,16 +54,18 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
 }
 
 fn parsePlistLine(reader: *std.Io.Reader, prefix: []const u8, suffix: []const u8) ![]const u8 {
-    const line = try reader.takeDelimiterExclusive('\n');
+    const line = try reader.takeDelimiter('\n') orelse {
+        return error.EOF;
+    };
     const line_trimmed = std.mem.trim(u8, line, " \t\r\n");
-    if(!(std.mem.startsWith(u8, line_trimmed, prefix) and std.mem.endsWith(u8, line_trimmed, suffix))) {
+    if (!(std.mem.startsWith(u8, line_trimmed, prefix) and std.mem.endsWith(u8, line_trimmed, suffix))) {
         return error.LineIsInvalid;
     }
-    const value = line_trimmed[(prefix.len) .. (line_trimmed.len - suffix.len)];
+    const value = line_trimmed[(prefix.len)..(line_trimmed.len - suffix.len)];
     return value;
 }
 
-fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) !OsRelease {
+fn parseMacosOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const []const u8) !OsRelease {
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
@@ -78,25 +78,24 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
         defer f.close();
 
         var buf: [1024]u8 = undefined;
-        var reader = f.reader(&buf);
+        var reader = f.reader(io, &buf);
 
         while (true) {
             const key = parsePlistLine(&reader.interface, "<key>", "</key>") catch |err| switch (err) {
-                std.io.Reader.DelimiterError.EndOfStream => break,
+                error.EOF => break,
                 error.LineIsInvalid => continue,
                 else => |e| return e,
             };
             if (std.mem.eql(u8, key, "ProductVersion")) {
                 const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
-                    std.io.Reader.DelimiterError.EndOfStream => break,
+                    error.EOF => break,
                     error.LineIsInvalid => continue,
                     else => |e| return e,
                 };
                 output.version = try allocator.dupe(u8, value);
-            }
-            else if (std.mem.eql(u8, key, "ProductBuildVersion")) {
+            } else if (std.mem.eql(u8, key, "ProductBuildVersion")) {
                 const value = parsePlistLine(&reader.interface, "<string>", "</string>") catch |err| switch (err) {
-                    std.io.Reader.DelimiterError.EndOfStream => break,
+                    error.EOF => break,
                     error.LineIsInvalid => continue,
                     else => |e| return e,
                 };
@@ -107,16 +106,19 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, paths: []const []const u8) 
     return output;
 }
 
-fn getOsRelease(allocator: std.mem.Allocator) !OsRelease {
+fn getOsRelease(allocator: std.mem.Allocator, io: std.Io) !OsRelease {
     switch (builtin.os.tag) {
-        .linux => return parseLinuxOsRelease(allocator, &.{ "/etc/os-release", "/usr/lib/os-release"}),
-        .macos => return parseMacosOsRelease(allocator, &.{ "/System/Library/CoreServices/SystemVersion.plist"}),
+        .linux => return parseLinuxOsRelease(allocator, io, &.{ "/etc/os-release", "/usr/lib/os-release" }),
+        .macos => return parseMacosOsRelease(allocator, io, &.{"/System/Library/CoreServices/SystemVersion.plist"}),
         else => return .{},
     }
 }
 
 test "parseLinuxOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const fake_data =
         \\DOCUMENTATION_URL="https://nixos.org/learn.html"
@@ -135,14 +137,14 @@ test "parseLinuxOsRelease parses basic os-release file" {
     defer tmp_dir.cleanup();
     const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_path);
-    const file_path = try std.fs.path.join(allocator, &.{tmp_path, "os-release"});
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "os-release" });
     defer allocator.free(file_path);
     try tmp_dir.dir.writeFile(.{
         .data = fake_data,
         .sub_path = "os-release",
     });
 
-    var out = try parseLinuxOsRelease(allocator, &.{file_path});
+    var out = try parseLinuxOsRelease(allocator, io, &.{file_path});
     defer out.deinit(allocator);
 
     try std.testing.expect(out.id != null);
@@ -154,6 +156,9 @@ test "parseLinuxOsRelease parses basic os-release file" {
 
 test "parseMacosOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const fake_data =
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -181,23 +186,23 @@ test "parseMacosOsRelease parses basic os-release file" {
     defer tmp_dir.cleanup();
     const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_path);
-    const file_path = try std.fs.path.join(allocator, &.{tmp_path, "SystemVersion.plist"});
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "SystemVersion.plist" });
     defer allocator.free(file_path);
     try tmp_dir.dir.writeFile(.{
         .data = fake_data,
         .sub_path = "SystemVersion.plist",
     });
 
-    var out = try parseMacosOsRelease(allocator, &.{file_path});
+    var out = try parseMacosOsRelease(allocator, io, &.{file_path});
     defer out.deinit(allocator);
 
     try std.testing.expect(out.version != null);
     try std.testing.expectEqualStrings("26.0", out.version.?);
 }
 
-pub fn getUserAgent(allocator: std.mem.Allocator) ![]u8 {
+pub fn getUserAgent(allocator: std.mem.Allocator, io: std.Io) ![]u8 {
     const uts = std.posix.uname();
-    var osr = try getOsRelease(allocator);
+    var osr = try getOsRelease(allocator, io);
     defer osr.deinit(allocator);
 
     return try std.fmt.allocPrint(
@@ -216,8 +221,11 @@ pub fn getUserAgent(allocator: std.mem.Allocator) ![]u8 {
 
 test "getUserAgent" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const out = try getUserAgent(allocator);
+    const out = try getUserAgent(allocator, io);
     defer allocator.free(out);
 
     std.debug.print("out={s}\n", .{out});

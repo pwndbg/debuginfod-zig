@@ -26,14 +26,13 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 
 # How to replace GDB debuginfod with this repo?
 ```
-git clone https://github.com/pwndbg/debuginfod-zig
-cd debuginfod-zig
-zig build -Doptimize=ReleaseSafe -Dlinkage=dynamic
-cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
-```
-> NOTE1: please download zig 0.15.1 - https://ziglang.org/download/
+nix build github:pwndbg/debuginfod-zig/zig0.16#dynamic
+cp ./result/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 
-> NOTE2: `/usr/lib64/libdebuginfod.so.1` path depends on your distribution
+# OR use env `LD_PRELOAD`
+LD_PRELOAD=./result/lib/libdebuginfo.so /usr/bin/gdb
+```
+> NOTE1: `/usr/lib64/libdebuginfod.so.1` path depends on your distribution
 
 ## ENV's implemented:
 - DEBUGINFOD_URLS
@@ -43,11 +42,11 @@ cp ./zig-out/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 - DEBUGINFOD_VERBOSE
 - DEBUGINFOD_PROGRESS
 - DEBUGINFOD_HEADERS_FILE
+- DEBUGINFOD_TIMEOUT
 
 ## ENV's not-implemented:
-- DEBUGINFOD_TIMEOUT (hard)
-- DEBUGINFOD_RETRY_LIMIT (easy)
 - DEBUGINFOD_IMA_CERT_PATH (hard?)
+- DEBUGINFOD_RETRY_LIMIT
 
 ## What is missing:
 - missing func debuginfod_find_metadata

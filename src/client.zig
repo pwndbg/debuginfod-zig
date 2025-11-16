@@ -3,7 +3,7 @@ const helpers = @import("helpers.zig");
 const log = @import("log.zig");
 const user_agent = @import("user_agent.zig");
 
-pub const ProgressFnType = fn(handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
+pub const ProgressFnType = fn (handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
 
 pub const DebuginfodEnvs = struct {
     // required
@@ -12,32 +12,35 @@ pub const DebuginfodEnvs = struct {
     user_agent: []const u8 = &.{},
 
     // optional
-    fetch_timeout: ?usize = null,
+    fetch_timeout: ?usize = 90,
     fetch_maxsize: ?usize = null,
     fetch_maxtime: ?usize = null,
     fetch_retry_limit: usize = 2,
     fetch_progress_to_stderr: bool = false,
     fetch_headers: ?[]const std.http.Header = null,
 
-    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, penvs: std.process.EnvMap) !void {
+    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.EnvMap) !void {
         self.urls = try getUrls(allocator, penvs);
         self.cache_path = try getCachePath(allocator, penvs);
-        self.user_agent = try user_agent.getUserAgent(allocator);
-        self.fetch_headers = try getHeadersFromFile(allocator, penvs);
+        self.user_agent = try user_agent.getUserAgent(allocator, io);
+        self.fetch_headers = try getHeadersFromFile(allocator, io, penvs);
 
-        if(penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
-            self.fetch_timeout = try std.fmt.parseInt(usize, val, 10);
+        if (penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
+            const d = try std.fmt.parseInt(isize, val, 10);
+            self.fetch_timeout = if (d <= 0) null else @intCast(d);
         }
-        if(penvs.get("DEBUGINFOD_MAXTIME")) |val| {
-            self.fetch_maxtime = try std.fmt.parseInt(usize, val, 10);
+        if (penvs.get("DEBUGINFOD_MAXTIME")) |val| {
+            const d = try std.fmt.parseInt(usize, val, 10);
+            self.fetch_maxtime = if (d == 0) null else d;
         }
-        if(penvs.get("DEBUGINFOD_MAXSIZE")) |val| {
-            self.fetch_maxsize = try std.fmt.parseInt(usize, val, 10);
+        if (penvs.get("DEBUGINFOD_MAXSIZE")) |val| {
+            const d = try std.fmt.parseInt(usize, val, 10);
+            self.fetch_maxsize = if (d == 0) null else d;
         }
-        if(penvs.get("DEBUGINFOD_RETRY_LIMIT")) |val| {
+        if (penvs.get("DEBUGINFOD_RETRY_LIMIT")) |val| {
             self.fetch_retry_limit = try std.fmt.parseInt(usize, val, 10);
         }
-        if(penvs.get("DEBUGINFOD_PROGRESS") != null) {
+        if (penvs.get("DEBUGINFOD_PROGRESS") != null) {
             self.fetch_progress_to_stderr = true;
         }
     }
@@ -49,7 +52,7 @@ pub const DebuginfodEnvs = struct {
         allocator.free(self.urls);
         allocator.free(self.cache_path);
         allocator.free(self.user_agent);
-        if(self.fetch_headers) |items| {
+        if (self.fetch_headers) |items| {
             for (items) |item| {
                 allocator.free(item.name);
                 allocator.free(item.value);
@@ -59,7 +62,7 @@ pub const DebuginfodEnvs = struct {
         self.* = undefined;
     }
 
-    fn getHeadersFromFile(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !?[]const std.http.Header {
+    fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.EnvMap) !?[]const std.http.Header {
         const headers_file = penvs.get("DEBUGINFOD_HEADERS_FILE") orelse {
             return null;
         };
@@ -70,16 +73,15 @@ pub const DebuginfodEnvs = struct {
         defer file.close();
 
         var buf: [8192]u8 = undefined;
-        var reader = file.reader(&buf);
+        var reader = file.reader(io, &buf);
         var list = try std.ArrayList(std.http.Header).initCapacity(allocator, 0);
 
         while (true) {
-            const line = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
-                std.io.Reader.DelimiterError.EndOfStream => break,
-                else => |e| {
-                    log.warn("getHeadersFromFile takeDelimiterExclusive,err: {}", .{e});
-                    break;
-                },
+            const line = reader.interface.takeDelimiter('\n') catch |err| {
+                log.warn("getHeadersFromFile takeDelimiter,err: {}", .{err});
+                break;
+            } orelse {
+                break;
             };
 
             const header_trimmed = std.mem.trim(u8, line, " \t\r\n");
@@ -92,7 +94,7 @@ pub const DebuginfodEnvs = struct {
 
             const header = std.http.Header{
                 .name = try allocator.dupe(u8, header_trimmed[0..colon_idx]),
-                .value = try allocator.dupe(u8, header_trimmed[colon_idx+2..]),
+                .value = try allocator.dupe(u8, header_trimmed[colon_idx + 2 ..]),
             };
             try list.append(allocator, header);
         }
@@ -129,10 +131,10 @@ pub const DebuginfodEnvs = struct {
             return try std.fs.path.join(allocator, &.{cache_path});
         }
         if (penvs.get("XDG_CACHE_HOME")) |cache_path| {
-            return try std.fs.path.join(allocator, &.{cache_path, "debuginfod_client"});
+            return try std.fs.path.join(allocator, &.{ cache_path, "debuginfod_client" });
         }
         if (penvs.get("HOME")) |cache_path| {
-            return try std.fs.path.join(allocator, &.{cache_path, ".cache", "debuginfod_client"});
+            return try std.fs.path.join(allocator, &.{ cache_path, ".cache", "debuginfod_client" });
         }
 
         log.warn("getCachePath erro, envs DEBUGINFOD_CACHE_PATH,XDG_CACHE_HOME,HOME any of them must be not empty", .{});
@@ -142,6 +144,9 @@ pub const DebuginfodEnvs = struct {
 
 test "DebuginfodEnvs" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
 
     var penvs = try std.process.getEnvMap(allocator);
     defer penvs.deinit();
@@ -149,7 +154,7 @@ test "DebuginfodEnvs" {
     try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1.com http://test2.com invalidbar");
 
     var denvs = DebuginfodEnvs{};
-    try denvs.init(allocator, penvs);
+    try denvs.init(allocator, io, penvs);
     defer denvs.deinit(allocator);
 
     try std.testing.expect(denvs.urls.len == 2);
@@ -168,14 +173,14 @@ pub const DebuginfodResponeHeaders = struct {
 
     fn parseHeaders(it: *std.http.HeaderIterator) !DebuginfodResponeHeaders {
         var out: DebuginfodResponeHeaders = .{};
-        while(it.next()) |header| {
-            if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-size")) {
+        while (it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "x-debuginfod-size")) {
                 out.size = try std.fmt.parseInt(usize, header.value, 10);
-            } else if (std.ascii.eqlIgnoreCase( header.name,"x-debuginfod-archive")) {
+            } else if (std.ascii.eqlIgnoreCase(header.name, "x-debuginfod-archive")) {
                 out.archive = header.value;
-            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-file")) {
+            } else if (std.ascii.eqlIgnoreCase(header.name, "x-debuginfod-file")) {
                 out.file = header.value;
-            } else if (std.ascii.eqlIgnoreCase( header.name, "x-debuginfod-imasignature")) {
+            } else if (std.ascii.eqlIgnoreCase(header.name, "x-debuginfod-imasignature")) {
                 out.imasignature = header.value;
             }
         }
@@ -184,7 +189,7 @@ pub const DebuginfodResponeHeaders = struct {
 
     pub fn deinit(self: *DebuginfodResponeHeaders) void {
         const allocator = self.allocator orelse return;
-        if(self._buffer) |buf| {
+        if (self._buffer) |buf| {
             allocator.free(buf);
         }
         self._buffer = null;
@@ -192,24 +197,24 @@ pub const DebuginfodResponeHeaders = struct {
 
     pub fn toBinding(self: *DebuginfodResponeHeaders) ![:0]u8 {
         const allocator = self.allocator orelse return error.AllocatorIsNotAssigned;
-        if(self._buffer) |buf| {
+        if (self._buffer) |buf| {
             return buf;
         }
 
         var list = try std.ArrayList(u8).initCapacity(allocator, 0);
-        if(self.size) |val| {
+        if (self.size) |val| {
             try list.print(allocator, "x-debuginfod-size: {d}\n", .{val});
         }
-        if(self.archive) |val| {
+        if (self.archive) |val| {
             try list.print(allocator, "x-debuginfod-archive: {s}\n", .{val});
         }
-        if(self.file) |val| {
+        if (self.file) |val| {
             try list.print(allocator, "x-debuginfod-file: {s}\n", .{val});
         }
-        if(self.imasignature) |val| {
+        if (self.imasignature) |val| {
             try list.print(allocator, "x-debuginfod-imasignature: {s}\n", .{val});
         }
-        if(list.items.len == 0) {
+        if (list.items.len == 0) {
             return error.NoHeaders;
         }
         const output = try list.toOwnedSliceSentinel(allocator, 0);
@@ -235,14 +240,18 @@ pub const DebuginfodContext = struct {
         const ctx = try allocator.create(DebuginfodContext);
         errdefer allocator.destroy(ctx);
 
+        var threaded: std.Io.Threaded = .init(allocator);
+        defer threaded.deinit();
+        const io = threaded.io();
+
         ctx.* = .{
             .allocator = allocator,
             .current_request_headers = try std.ArrayList(std.http.Header).initCapacity(allocator, 0),
         };
-        try ctx.envs.init(allocator, penvs);
+        try ctx.envs.init(allocator, io, penvs);
 
-        if(ctx.envs.fetch_headers) |headers| {
-            for(headers) |header| {
+        if (ctx.envs.fetch_headers) |headers| {
+            for (headers) |header| {
                 try ctx.addRequestHeader(header);
             }
         }
@@ -253,7 +262,7 @@ pub const DebuginfodContext = struct {
         const allocator = self.allocator;
         self.envs.deinit(allocator);
 
-        for(self.current_request_headers.items) |item| {
+        for (self.current_request_headers.items) |item| {
             allocator.free(item.name);
             allocator.free(item.value);
         }
@@ -277,10 +286,10 @@ pub const DebuginfodContext = struct {
     pub fn findDebuginfo(self: *DebuginfodContext, build_id: []const u8) ![]u8 {
         log.info("findDebuginfo {s}", .{build_id});
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "debuginfo"});
-        errdefer self.allocator.free(local_path);  // caller must free
+        const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "debuginfo" });
+        errdefer self.allocator.free(local_path); // caller must free
 
-        if(helpers.fileExists(local_path)) {
+        if (helpers.fileExists(local_path)) {
             return local_path;
         }
 
@@ -294,22 +303,22 @@ pub const DebuginfodContext = struct {
     pub fn findExecutable(self: *DebuginfodContext, build_id: []const u8) ![]u8 {
         log.info("findExecutable {s}", .{build_id});
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, "executable"});
-        errdefer self.allocator.free(local_path);  // caller must free
+        const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "executable" });
+        errdefer self.allocator.free(local_path); // caller must free
 
-        if(helpers.fileExists(local_path)) {
+        if (helpers.fileExists(local_path)) {
             return local_path;
         }
 
         const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/executable", .{build_id});
         defer self.allocator.free(url_path);
 
-        try self.fetchFullOptions( url_path, local_path);
+        try self.fetchFullOptions(url_path, local_path);
         return local_path;
     }
 
     pub fn findSource(self: *DebuginfodContext, build_id: []const u8, source_path: []const u8) ![]u8 {
-        log.info("findSource {s} {s}", .{build_id, source_path});
+        log.info("findSource {s} {s}", .{ build_id, source_path });
 
         const source_path_encoded = try helpers.urlencodePart(self.allocator, source_path);
         defer self.allocator.free(source_path_encoded);
@@ -317,40 +326,40 @@ pub const DebuginfodContext = struct {
         const source_path_escaped = try helpers.escapeFilename(self.allocator, source_path);
         defer self.allocator.free(source_path_escaped);
 
-        const cache_part = try std.mem.concat(self.allocator, u8, &.{"source-", source_path_escaped});
+        const cache_part = try std.mem.concat(self.allocator, u8, &.{ "source-", source_path_escaped });
         defer self.allocator.free(cache_part);
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, cache_part});
-        errdefer self.allocator.free(local_path);  // caller must free
+        const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, cache_part });
+        errdefer self.allocator.free(local_path); // caller must free
 
-        if(helpers.fileExists(local_path)) {
+        if (helpers.fileExists(local_path)) {
             return local_path;
         }
 
-        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/source/{s}", .{build_id, source_path_encoded});
+        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/source/{s}", .{ build_id, source_path_encoded });
         defer self.allocator.free(url_path);
 
-        try self.fetchFullOptions( url_path, local_path);
+        try self.fetchFullOptions(url_path, local_path);
         return local_path;
     }
 
     pub fn findSection(self: *DebuginfodContext, build_id: []const u8, section: []const u8) ![]u8 {
-        log.info("findSection {s} {s}", .{build_id, section});
+        log.info("findSection {s} {s}", .{ build_id, section });
 
         const section_escaped = try helpers.escapeFilename(self.allocator, section);
         defer self.allocator.free(section_escaped);
 
-        const cache_part = try std.mem.concat(self.allocator, u8, &.{"section-", section_escaped});
+        const cache_part = try std.mem.concat(self.allocator, u8, &.{ "section-", section_escaped });
         defer self.allocator.free(cache_part);
 
-        const local_path = try std.fs.path.join(self.allocator, &.{self.envs.cache_path, build_id, cache_part});
-        errdefer self.allocator.free(local_path);  // caller must free
+        const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, cache_part });
+        errdefer self.allocator.free(local_path); // caller must free
 
-        if(helpers.fileExists(local_path)) {
+        if (helpers.fileExists(local_path)) {
             return local_path;
         }
 
-        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/section/{s}", .{build_id, section});
+        const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/section/{s}", .{ build_id, section });
         defer self.allocator.free(url_path);
 
         try self.fetchFullOptions(url_path, local_path);
@@ -365,17 +374,17 @@ pub const DebuginfodContext = struct {
     fn getTempFilepath(allocator: std.mem.Allocator, local_path: []const u8) ![]u8 {
         const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
         // todo: security? random filename?
-        const tmp_basename = try std.mem.concat(allocator, u8, &.{".tmp.", std.fs.path.basename(local_path)});
+        const tmp_basename = try std.mem.concat(allocator, u8, &.{ ".tmp.", std.fs.path.basename(local_path) });
         defer allocator.free(tmp_basename);
 
-        return try std.fs.path.join(allocator, &.{local_dirname, tmp_basename});
+        return try std.fs.path.join(allocator, &.{ local_dirname, tmp_basename });
     }
 
     fn fetchFullOptions(self: *DebuginfodContext, url_path: []const u8, local_path: []const u8) !void {
         var lastErr: anyerror = error.ErrorNotFound;
 
-        for(self.envs.urls) |url| {
-            const full_url = try std.mem.concatWithSentinel(self.allocator, u8, &.{url, url_path}, 0);
+        for (self.envs.urls) |url| {
+            const full_url = try std.mem.concatWithSentinel(self.allocator, u8, &.{ url, url_path }, 0);
             defer self.allocator.free(full_url);
 
             self.fetchAsFile(full_url, local_path) catch |err| {
@@ -389,6 +398,9 @@ pub const DebuginfodContext = struct {
     }
 
     fn fetchAsFile(self: *DebuginfodContext, url: [:0]const u8, local_path: []const u8) !void {
+        self.current_url = url;
+        defer self.current_url = null;
+
         const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
         const local_path_tmp = try getTempFilepath(self.allocator, local_path);
         defer self.allocator.free(local_path_tmp);
@@ -402,33 +414,86 @@ pub const DebuginfodContext = struct {
             });
             defer file.close();
 
-            // var buffer: [64 * 1024]u8 = undefined; // BUG: https://github.com/ziglang/zig/pull/25235
-            var buffer: [0]u8 = undefined;
+            var buffer: [64 * 1024]u8 = undefined;
             var writer = file.writer(&buffer);
 
-            try self.fetch(url, &writer.interface);
+            var threaded: std.Io.Threaded = .init(self.allocator);
+            defer threaded.deinit();
+            const io = threaded.io();
+
+            var writed_bytes: std.atomic.Value(usize) = .init(0);
+            var total_bytes: std.atomic.Value(usize) = .init(0);
+            var fetch_finished: std.atomic.Value(bool) = .init(false);
+
+            var ffetch = try io.concurrent(DebuginfodContext.fetch, .{ self, io, url, &writer.interface, &writed_bytes, &total_bytes, &fetch_finished });
+            defer ffetch.cancel(io) catch {};
+
+            try self.loopProgress(io, url, &writed_bytes, &total_bytes, &fetch_finished);
+            try ffetch.await(io);
         }
 
         try std.fs.renameAbsolute(local_path_tmp, local_path);
     }
 
-    fn fetch(self: *DebuginfodContext, url: [:0]const u8, response_writer: *std.Io.Writer) !void {
-        log.info("fetch {s}", .{url});
+    fn loopProgress(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
+        const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
+        const fetch_start_at = try std.time.Instant.now();
 
-        self.current_url = url;
-        defer self.current_url = null;
+        var progress: std.Progress.Node = undefined;
+        var progress_count_one = false;
+        if (show_progress_stderr) {
+            progress = std.Progress.start(.{
+                .root_name = url,
+            });
+        }
+        defer if (show_progress_stderr) progress.end();
+
+        while (!fetch_finished.load(.acquire)) {
+            const current_writed_bytes = writed_bytes.load(.acquire);
+            const current_total_bytes = total_bytes.load(.acquire);
+            const loop_at = try std.time.Instant.now();
+            const diff = loop_at.since(fetch_start_at) / std.time.ns_per_s;
+
+            if (self.envs.fetch_timeout != null and current_writed_bytes < 100_000 and diff > self.envs.fetch_timeout.?) {
+                return error.DownloadTimeoutExceed;
+            }
+            if (self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
+                return error.DownloadMaxSizeExceed;
+            }
+            if (self.envs.fetch_maxtime != null and diff > self.envs.fetch_maxtime.?) {
+                return error.DownloadMaxTimeExceed;
+            }
+
+            if (show_progress_stderr) {
+                if (current_total_bytes > 0 and !progress_count_one) {
+                    progress_count_one = true;
+                    progress.increaseEstimatedTotalItems(current_total_bytes);
+                }
+                progress.setCompletedItems(current_writed_bytes);
+            } else {
+                try self.onFetchProgress(current_writed_bytes, current_total_bytes);
+            }
+
+            try io.sleep(.fromMilliseconds(100), .awake);
+        }
+    }
+
+    fn fetch(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, response_writer: *std.Io.Writer, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
+        defer fetch_finished.store(true, .release);
+        defer response_writer.flush() catch {};
+
+        log.info("fetch {s}", .{url});
 
         var client = std.http.Client{
             .allocator = self.allocator,
+            .io = io,
         };
         defer client.deinit();
 
         const redirect_buffer: []u8 = try client.allocator.alloc(u8, 8 * 1024);
         defer client.allocator.free(redirect_buffer);
 
-        // TODO: connect timeout? setsocketopt
-        // TODO: self.envs.fetch_retry_limit; (bo moze byc status code 500? lub conn err)
-        var req = try client.request( .GET, try std.Uri.parse(url), .{
+        var req = try client.request(.GET, try std.Uri.parse(url), .{
             .redirect_behavior = @enumFromInt(3),
             .keep_alive = true,
             .headers = .{
@@ -444,10 +509,10 @@ pub const DebuginfodContext = struct {
         try req.sendBodiless();
         var response = try req.receiveHead(redirect_buffer);
 
-        if(response.head.status == .not_found) {
+        if (response.head.status == .not_found) {
             return error.FetchStatusNotFound;
         }
-        if(response.head.status != .ok) {
+        if (response.head.status != .ok) {
             return error.FetchStatusNotOk;
         }
 
@@ -459,14 +524,15 @@ pub const DebuginfodContext = struct {
         self.current_response_headers = &response_headers;
         defer self.current_response_headers = null;
 
-        var file_size: ?usize = null;
-        if(response_headers.size) |size| {
+        var file_size: usize = 0;
+        if (response_headers.size) |size| {
             file_size = size;
-        } else if(response.head.content_encoding == .identity and response.head.content_length != null) {
-            file_size = response.head.content_length.?;
+        } else if (response.head.content_encoding == .identity and response.head.content_length != null) {
+            file_size = @truncate(response.head.content_length.?);
         }
+        total_bytes.store(file_size, .release);
 
-        if(self.envs.fetch_maxsize != null and file_size != null and self.envs.fetch_maxsize.? < file_size.?) {
+        if (self.envs.fetch_maxsize != null and file_size > 0 and self.envs.fetch_maxsize.? < file_size) {
             return error.DownloadMaxSizeExceed;
         }
 
@@ -482,46 +548,18 @@ pub const DebuginfodContext = struct {
         var decompress: std.http.Decompress = undefined;
         const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
 
-        var current_writed_bytes: usize = 0;
-        const writer_start_at = std.time.timestamp();
-
-        var progress: std.Progress.Node = undefined;
-        const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
-        if(show_progress_stderr) {
-            progress = std.Progress.start(.{
-                .root_name = url,
-                .estimated_total_items = file_size orelse 0,
-            });
-        }
-        defer if(show_progress_stderr) progress.end();
-
         while (true) {
-            current_writed_bytes += reader.stream(response_writer, .unlimited) catch |err| switch (err) {
+            const current_writed_bytes = reader.stream(response_writer, .unlimited) catch |err| switch (err) {
                 error.EndOfStream => break,
-                error.ReadFailed => return response.bodyErr().?,
                 else => |e| return e,
             };
-
-            if(self.envs.fetch_maxsize != null and self.envs.fetch_maxsize.? < current_writed_bytes) {
-                return error.DownloadMaxSizeExceed;
-            }
-            if(self.envs.fetch_maxtime) |maxtime| {
-                const diff = std.time.timestamp() - writer_start_at;
-                if(diff < 0) return error.YourClockIsShaking;
-                if(diff > maxtime) return error.DownloadMaxTimeExceed;
-            }
-
-            if(show_progress_stderr) {
-                progress.setCompletedItems(current_writed_bytes);
-            } else {
-                try self.onFetchProgress(current_writed_bytes, file_size);
-            }
+            _ = writed_bytes.fetchAdd(current_writed_bytes, .release);
         }
     }
 
-    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: ?usize) !void {
-        if(self.progress_fn) |callback| {
-            const download_was_canceled = callback(self, @intCast(current), @intCast(total orelse 0)) != 0;
+    fn onFetchProgress(self: *DebuginfodContext, current: usize, total: usize) !void {
+        if (self.progress_fn) |callback| {
+            const download_was_canceled = callback(self, @intCast(current), @intCast(total)) != 0;
             if (download_was_canceled) {
                 return error.DownloadInterrupted;
             }
@@ -529,58 +567,52 @@ pub const DebuginfodContext = struct {
     }
 };
 
-pub fn testStartServer(file_blob: []const u8) !struct {
-    thread: std.Thread,
-    port: u16,
-} {
-    const address = try std.net.Address.parseIp4("127.0.0.1", 0);
-    var socket = try address.listen(.{});
-    errdefer socket.deinit();
-    const port = socket.listen_address.getPort();
+pub fn testStartServer(io: std.Io, file_blob: []const u8, queue: *std.Io.Queue(u16)) !void {
+    const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+    var socket = try address.listen(io, .{});
+    errdefer socket.deinit(io);
+    try queue.putOne(io, socket.socket.address.getPort());
 
-    const thread = try std.Thread.spawn(.{}, struct {
-        fn run(server2: std.net.Server, file_blob2: []const u8) void {
-            var server = server2;
-            defer server.deinit();
+    defer socket.deinit(io);
 
-            // handle only single conn
-            while (true) {
-                std.debug.print("wating in loop\n", .{});
+    // handle only single conn
+    while (true) {
+        std.debug.print("wating in loop\n", .{});
 
-                const conn = server.accept() catch |err| {
-                    std.debug.print("Test HTTP Server accept error: {}\n", .{err});
-                    break;
-                };
-                std.debug.print("accepted in loop\n", .{});
+        const conn = socket.accept(io) catch |err| {
+            std.debug.print("Test HTTP Server accept error: {}\n", .{err});
+            break;
+        };
+        std.debug.print("accepted in loop\n", .{});
 
-                testHandleConnection(conn, file_blob2);
-                break;
-            }
+        testHandleConnection(io, conn, file_blob) catch |err| switch (err) {
+            error.HttpConnectionClosing => break,
+            else => |e| return e,
+        };
+    }
 
-            std.debug.print("exit http loop\n", .{});
-        }
-    }.run, .{socket, file_blob});
-
-    return .{ .thread = thread, .port = port };
+    std.debug.print("exit http loop\n", .{});
 }
 
-fn testHandleConnection(conn: std.net.Server.Connection, file_blob: []const u8) void {
-    defer conn.stream.close();
+fn testHandleConnection(io: std.Io, stream: std.Io.net.Stream, file_blob: []const u8) !void {
+    defer stream.close(io);
 
     var req_buf: [2048]u8 = undefined;
-    var conn_reader = conn.stream.reader(&req_buf);
-    var conn_writer = conn.stream.writer(&req_buf);
+    var conn_reader = stream.reader(io, &req_buf);
+    var conn_writer = stream.writer(io, &req_buf);
 
-    var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+    var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
     while (true) {
+        std.debug.print("receiveHead start\n", .{});
         var req = http_server.receiveHead() catch |err| {
             std.debug.print("Test HTTP Server error: {}\n", .{err});
-            return;
+            return err;
         };
+        std.debug.print("receiveHead end\n", .{});
         testHandleRequest(&req, file_blob) catch |err| {
             std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
             req.respond("server error", .{ .status = .internal_server_error }) catch {};
-            return;
+            return err;
         };
     }
 }
@@ -624,7 +656,11 @@ test "DebuginfodContext no exists servers" {
     try std.testing.expectEqualStrings("https://test1-notexist", ctx.envs.urls[0]);
     try std.testing.expectEqualStrings("http://test2-notexist", ctx.envs.urls[1]);
 
-    try std.testing.expectError(error.UnknownHostName, ctx.findDebuginfo("ffffff11851246b7766f0a7b3042a8988faad435"));
+    _ = ctx.findDebuginfo("ffffff11851246b7766f0a7b3042a8988faad435") catch |err| switch (err) {
+        error.NameServerFailure => |e| try std.testing.expectEqual(error.NameServerFailure, e),
+        error.UnknownHostName => |e| try std.testing.expectEqual(error.UnknownHostName, e),
+        else => |e| try std.testing.expectEqual(error.UnknownHostName, e),
+    };
 }
 
 test "DebuginfodContext real server" {
@@ -632,15 +668,25 @@ test "DebuginfodContext real server" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const debughttp = try testStartServer("debug content");
-    defer debughttp.thread.join();
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var queue_buf: [1]u16 = undefined;
+    var queue: std.Io.Queue(u16) = .init(&queue_buf);
+
+    const contentInFile = "debug content";
+    var debug_server = try io.concurrent(testStartServer, .{ io, contentInFile, &queue });
+    defer debug_server.cancel(io) catch {};
+
+    const port = try queue.getOne(io);
 
     var ctx: *DebuginfodContext = undefined;
     {
         var penvs = try std.process.getEnvMap(allocator);
         defer penvs.deinit();
 
-        const DEBUGINFOD_URLS = try std.fmt.allocPrint(allocator, "invalidfoo https://test1-notexist http://test2-notexist http://127.0.0.1:{d} invalidbar", .{debughttp.port});
+        const DEBUGINFOD_URLS = try std.fmt.allocPrint(allocator, "invalidfoo https://test1-notexist http://test2-notexist http://127.0.0.1:{d} invalidbar", .{port});
         defer allocator.free(DEBUGINFOD_URLS);
         try penvs.put("DEBUGINFOD_URLS", DEBUGINFOD_URLS);
 
@@ -656,4 +702,12 @@ test "DebuginfodContext real server" {
 
     const filepath = try ctx.findDebuginfo("5c9d8b11851246b7766f0a7b3042a8988faad435");
     defer allocator.free(filepath);
+
+    const debugfile = try std.fs.cwd().openFile(filepath, .{});
+    defer debugfile.close();
+
+    var buf: [1024]u8 = undefined;
+    const n = try debugfile.read(&buf);
+
+    try std.testing.expectEqualStrings(contentInFile, buf[0..n]);
 }

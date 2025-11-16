@@ -15,7 +15,7 @@ pub fn setLogFile(file: ?std.fs.File) void {
     logwriter_mutex.lock();
     defer logwriter_mutex.unlock();
 
-    if(file) |filen| {
+    if (file) |filen| {
         log_file_writer.file = filen;
     } else {
         log_file_writer.file = .{ .handle = -1 };
@@ -48,15 +48,15 @@ fn log(
     if (@intFromEnum(message_level) > @intFromEnum(default_log_level)) {
         return;
     }
-    if(!logwriter_was_inited) {
+    if (!logwriter_was_inited) {
         logwriter_was_inited = true;
-        if(std.posix.getenv("DEBUGINFOD_VERBOSE") != null) {
+        if (std.posix.getenv("DEBUGINFOD_VERBOSE") != null) {
             setLogFile(.stderr());
         }
     }
 
     var buffer: [64]u8 = undefined;
-    if(lockLogWriter(&buffer)) |stderr| {
+    if (lockLogWriter(&buffer)) |stderr| {
         defer unlockLogWriter();
         const level_txt = comptime message_level.asText();
         const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";

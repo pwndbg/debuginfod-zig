@@ -144,7 +144,7 @@ export fn debuginfod_find_section(
     section: [*c]const c_char,
     path_out_c: [*c][*c]c_char,
 ) c_int {
-    comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
+    // comptime std.debug.assert(@sizeOf(@TypeOf(section)) == 8);
     return debuginfod_find_common(handle, build_id, build_id_len, section, .Section, path_out_c);
 }
 
@@ -206,7 +206,7 @@ export fn debuginfod_add_http_header(
     };
     ctx.addRequestHeader(.{
         .name = header_casted[0..colon_idx],
-        .value = header_casted[colon_idx+2..],
+        .value = header_casted[colon_idx + 2 ..],
     }) catch {
         return CErrUnknown;
     };
