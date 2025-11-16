@@ -24,9 +24,9 @@ zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe
 zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 ```
 
-# How to replace GDB debuginfod with this repo?
+## How to replace GDB debuginfod with this repo?
 ```
-nix build github:pwndbg/debuginfod-zig/zig0.16#dynamic
+nix build github:pwndbg/debuginfod-zig#dynamic
 cp ./result/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
 
 # OR use env `LD_PRELOAD`
@@ -53,4 +53,3 @@ LD_PRELOAD=./result/lib/libdebuginfo.so /usr/bin/gdb
 - auto-cleanup old debuginfo files
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
-- http connection is cancelable only after successful connect
