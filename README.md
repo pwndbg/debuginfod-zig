@@ -27,10 +27,10 @@ zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
 ## How to replace GDB debuginfod with this repo?
 ```
 nix build github:pwndbg/debuginfod-zig#dynamic
-cp ./result/lib/libdebuginfo.so /usr/lib64/libdebuginfod.so.1
+cp ./result/lib/libdebuginfod.so /usr/lib64/libdebuginfod.so.1
 
 # OR use env `LD_PRELOAD`
-LD_PRELOAD=./result/lib/libdebuginfo.so /usr/bin/gdb
+LD_PRELOAD=./result/lib/libdebuginfod.so /usr/bin/gdb
 ```
 > NOTE1: `/usr/lib64/libdebuginfod.so.1` path depends on your distribution
 
