@@ -11,14 +11,21 @@
 let
   isCross = stdenv.buildPlatform.system != stdenv.targetPlatform.system;
   isSameOS = stdenv.buildPlatform.parsed.kernel.name == stdenv.targetPlatform.parsed.kernel.name;
-
-  glibcVersion = if stdenv.targetPlatform.isLoongArch64 then "2.36" else "2.28";
+  glibcVersion = if stdenv.targetPlatform.isLoongArch64 then ".2.36" else ".2.28";
+  muslVersion = if stdenv.targetPlatform.isLoongArch64 then "" else "";
+  abiVersion =
+    if stdenv.targetPlatform.isGnu then
+      glibcVersion
+    else if stdenv.targetPlatform.isMusl then
+      muslVersion
+    else
+      (throw "not supported abi version ${stdenv.targetPlatform.parsed.abi.name}");
 
   zigTarget =
     if stdenv.targetPlatform.isLinux && stdenv.targetPlatform.is32bit then
-      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.family}-linux-${stdenv.targetPlatform.parsed.abi.name}.${glibcVersion}"
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.family}-linux-${stdenv.targetPlatform.parsed.abi.name}${abiVersion}"
     else if stdenv.targetPlatform.isLinux then
-      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}.${glibcVersion}"
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}${abiVersion}"
     else if stdenv.targetPlatform.isDarwin then
       "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-macos.${stdenv.targetPlatform.darwinSdkVersion}"
     else
