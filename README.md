@@ -17,11 +17,11 @@ While GNU `debuginfod` works well only on Linux, it comes with several limitatio
 
 ## Build
 ```
-zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe
-zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe
+zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe -Dlinkage=dynamic
+zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe -Dlinkage=dynamic
 
-zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe
-zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
+zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -Dlinkage=dynamic
+zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe -Dlinkage=dynamic
 ```
 
 ## How to replace GDB debuginfod with this repo?
