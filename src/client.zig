@@ -384,7 +384,7 @@ pub const DebuginfodContext = struct {
         var lastErr: anyerror = error.ErrorNotFound;
 
         for (self.envs.urls) |url| {
-            const full_url = try std.mem.concatWithSentinel(self.allocator, u8, &.{ url, url_path }, 0);
+            const full_url = try std.mem.concatWithSentinel(self.allocator, u8, &.{ std.mem.cutSuffix(u8, url, "/") orelse url, url_path }, 0);
             defer self.allocator.free(full_url);
 
             self.fetchAsFile(full_url, local_path) catch |err| {
