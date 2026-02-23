@@ -53,3 +53,53 @@ LD_PRELOAD=./result/lib/libdebuginfod.so /usr/bin/gdb
 - auto-cleanup old debuginfo files
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
+
+
+## `flake.nix` example usage:
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    debuginfod-zig.url = "github:pwndbg/debuginfod-zig";
+  };
+  outputs =
+    inputs@{
+      self,
+      nixpkgs,
+      debuginfod-zig,
+      ...
+    }:
+    let
+      forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
+      fun_pkgs =
+        system:
+        import nixpkgs {
+          inherit system;
+          overlays = [
+            debuginfod-zig.overlays.default
+            (final: prev: {
+              gdb-with-debuginfod = (prev.gdb.override { enableDebuginfod = false; }).overrideAttrs( old: {
+                 buildInputs = (old.buildInputs or []) ++ [
+                    prev.libdebuginfod-zig-static
+                 ];
+                 configureFlags = (old.configureFlags or []) ++ [
+                    "--with-debuginfod=yes"
+                 ];
+              });
+            })
+          ];
+        };
+    in
+    {
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = (fun_pkgs system);
+        in
+        {
+          gdb-with-debuginfod = pkgs.gdb-with-debuginfod;
+        }
+      );
+    };
+}
+```
