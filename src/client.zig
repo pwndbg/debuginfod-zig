@@ -5,6 +5,9 @@ const user_agent = @import("user_agent.zig");
 
 pub const ProgressFnType = fn (handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
 
+// Default negative-cache TTL (seconds), matching elfutils' cache_miss_default_s.
+const cache_miss_default_s: i64 = 600;
+
 pub const DebuginfodEnvs = struct {
     // required
     urls: [][]const u8 = &.{},
@@ -24,6 +27,11 @@ pub const DebuginfodEnvs = struct {
     http_proxy: ?[]const u8 = null,
     https_proxy: ?[]const u8 = null,
 
+    // Negative-cache TTL in seconds: a not-found result is remembered (as an
+    // empty marker file) for this long before the server is queried again.
+    // Mirrors elfutils' cache_miss_s; read from `$cache/cache_miss_s` if present.
+    cache_miss_s: i64 = cache_miss_default_s,
+
     fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !void {
         self.urls = try getUrls(allocator, penvs);
         self.cache_path = try getCachePath(allocator, penvs);
@@ -31,6 +39,7 @@ pub const DebuginfodEnvs = struct {
         self.fetch_headers = try getHeadersFromFile(allocator, io, penvs);
         self.http_proxy = try getProxy(allocator, penvs, &.{ "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY" });
         self.https_proxy = try getProxy(allocator, penvs, &.{ "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY" });
+        self.cache_miss_s = getCacheMissS(allocator, io, self.cache_path);
 
         if (penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
             const d = try std.fmt.parseInt(isize, val, 10);
@@ -78,6 +87,17 @@ pub const DebuginfodEnvs = struct {
             return try allocator.dupe(u8, val);
         }
         return null;
+    }
+
+    // Read `$cache/cache_miss_s` if present (so users can tune it like elfutils),
+    // otherwise fall back to the default. Never fails: any error -> default.
+    // Unlike elfutils we do not auto-create the file.
+    fn getCacheMissS(allocator: std.mem.Allocator, io: std.Io, cache_path: []const u8) i64 {
+        const path = std.fs.path.join(allocator, &.{ cache_path, "cache_miss_s" }) catch return cache_miss_default_s;
+        defer allocator.free(path);
+        const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64)) catch return cache_miss_default_s;
+        defer allocator.free(data);
+        return std.fmt.parseInt(i64, std.mem.trim(u8, data, " \t\r\n"), 10) catch cache_miss_default_s;
     }
 
     fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !?[]const std.http.Header {
@@ -308,14 +328,39 @@ pub const DebuginfodContext = struct {
         });
     }
 
+    const CacheState = enum { hit, miss };
+
+    // Inspect the cache entry for `local_path`:
+    //   - non-empty file        -> .hit (use it)
+    //   - empty marker, fresh    -> error.FetchStatusNotFound (negative-cache hit, no network)
+    //   - empty marker, stale    -> delete it, .miss (re-query)
+    //   - missing                -> .miss (query)
+    // Mirrors elfutils' size==0 negative-cache scheme.
+    fn checkCache(self: *DebuginfodContext, local_path: []const u8) !CacheState {
+        const io = self.getIo();
+        const st = std.Io.Dir.cwd().statFile(io, local_path, .{}) catch return .miss;
+        if (st.kind != .file) return .miss;
+        if (st.size != 0) return .hit;
+
+        const now = std.Io.Clock.now(.real, io);
+        const age_ns = st.mtime.durationTo(now).nanoseconds;
+        const ttl_ns = @as(i96, self.envs.cache_miss_s) * std.time.ns_per_s;
+        if (age_ns <= ttl_ns) {
+            return error.FetchStatusNotFound;
+        }
+        std.Io.Dir.deleteFileAbsolute(io, local_path) catch {};
+        return .miss;
+    }
+
     pub fn findDebuginfo(self: *DebuginfodContext, build_id: []const u8) ![]u8 {
         log.info("findDebuginfo {s}", .{build_id});
 
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "debuginfo" });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(self.getIo(), local_path)) {
-            return local_path;
+        switch (try self.checkCache(local_path)) {
+            .hit => return local_path,
+            .miss => {},
         }
 
         const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/debuginfo", .{build_id});
@@ -331,8 +376,9 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "executable" });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(self.getIo(), local_path)) {
-            return local_path;
+        switch (try self.checkCache(local_path)) {
+            .hit => return local_path,
+            .miss => {},
         }
 
         const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/executable", .{build_id});
@@ -357,8 +403,9 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, cache_part });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(self.getIo(), local_path)) {
-            return local_path;
+        switch (try self.checkCache(local_path)) {
+            .hit => return local_path,
+            .miss => {},
         }
 
         const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/source/{s}", .{ build_id, source_path_encoded });
@@ -380,8 +427,9 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, cache_part });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(self.getIo(), local_path)) {
-            return local_path;
+        switch (try self.checkCache(local_path)) {
+            .hit => return local_path,
+            .miss => {},
         }
 
         const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/section/{s}", .{ build_id, section });
@@ -419,7 +467,24 @@ pub const DebuginfodContext = struct {
             return;
         }
 
+        // All servers were reachable but returned 404: record a negative-cache
+        // marker so we don't re-query for the next `cache_miss_s` seconds.
+        if (lastErr == error.FetchStatusNotFound) {
+            self.writeNegativeMarker(local_path) catch {};
+        }
+
         return lastErr;
+    }
+
+    // Create the empty (0-byte) negative-cache marker file at `local_path`.
+    // O_EXCL: if a concurrent task already created it (or a real download
+    // landed), the error is ignored by the caller.
+    fn writeNegativeMarker(self: *DebuginfodContext, local_path: []const u8) !void {
+        const io = self.getIo();
+        const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
+        std.Io.Dir.cwd().createDirPath(io, local_dirname) catch {};
+        var file = try std.Io.Dir.createFileAbsolute(io, local_path, .{ .exclusive = true });
+        file.close(io);
     }
 
     fn fetchAsFile(self: *DebuginfodContext, url: [:0]const u8, local_path: []const u8) !void {
@@ -656,6 +721,12 @@ fn testHandleConnection(io: std.Io, stream: std.Io.net.Stream, file_blob: []cons
 }
 
 fn testHandleRequest(req: *std.http.Server.Request, file_blob: []const u8) !void {
+    // An empty blob simulates a server that does not have the artifact (404).
+    if (file_blob.len == 0) {
+        try req.respond("not found", .{ .status = .not_found });
+        return;
+    }
+
     var send_buffer: [4096]u8 = undefined;
     var res = try req.respondStreaming(&send_buffer, .{
         .content_length = file_blob.len,
@@ -745,4 +816,81 @@ test "DebuginfodContext real server" {
     defer allocator.free(content);
 
     try std.testing.expectEqualStrings(contentInFile, content);
+}
+
+test "DebuginfodContext negative cache: 404 creates an empty marker" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var queue_buf: [1]u16 = undefined;
+    var queue: std.Io.Queue(u16) = .init(&queue_buf);
+
+    // An empty blob makes the test server answer 404 for every request.
+    var debug_server = try io.concurrent(testStartServer, .{ io, "", &queue });
+    defer debug_server.cancel(io) catch {};
+    const port = try queue.getOne(io);
+
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
+
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try helpers.getEnvMap(allocator);
+        defer penvs.deinit();
+        const urls = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{port});
+        defer allocator.free(urls);
+        try penvs.put("DEBUGINFOD_URLS", urls);
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
+    defer ctx.deinit();
+
+    const build_id = "5c9d8b11851246b7766f0a7b3042a8988faad435";
+    try std.testing.expectError(error.FetchStatusNotFound, ctx.findDebuginfo(build_id));
+
+    const marker = try std.fs.path.join(allocator, &.{ tmp_path, build_id, "debuginfo" });
+    defer allocator.free(marker);
+    const st = try std.Io.Dir.cwd().statFile(io, marker, .{});
+    try std.testing.expectEqual(@as(u64, 0), st.size);
+}
+
+test "DebuginfodContext negative cache: fresh marker short-circuits without network" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
+
+    const build_id = "5c9d8b11851246b7766f0a7b3042a8988faad435";
+
+    // Pre-create a fresh, empty negative marker at <cache>/<build_id>/debuginfo.
+    try tmp_dir.dir.createDirPath(io, build_id);
+    const sub = try std.fs.path.join(allocator, &.{ build_id, "debuginfo" });
+    defer allocator.free(sub);
+    var marker_file = try tmp_dir.dir.createFile(io, sub, .{});
+    marker_file.close(io);
+
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try helpers.getEnvMap(allocator);
+        defer penvs.deinit();
+        // Unreachable port: if the lookup hit the network it would fail with a
+        // connection error instead of the negative-cache ENOENT.
+        try penvs.put("DEBUGINFOD_URLS", "http://127.0.0.1:1");
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
+    defer ctx.deinit();
+
+    try std.testing.expectError(error.FetchStatusNotFound, ctx.findDebuginfo(build_id));
 }
