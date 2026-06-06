@@ -19,11 +19,18 @@ pub const DebuginfodEnvs = struct {
     fetch_progress_to_stderr: bool = false,
     fetch_headers: ?[]const std.http.Header = null,
 
+    // Resolved http(s) proxy URLs from the standard env vars (precedence
+    // handled once here so `fetch` doesn't re-scan the environment).
+    http_proxy: ?[]const u8 = null,
+    https_proxy: ?[]const u8 = null,
+
     fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !void {
         self.urls = try getUrls(allocator, penvs);
         self.cache_path = try getCachePath(allocator, penvs);
         self.user_agent = try user_agent.getUserAgent(allocator, io);
         self.fetch_headers = try getHeadersFromFile(allocator, io, penvs);
+        self.http_proxy = try getProxy(allocator, penvs, &.{ "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY" });
+        self.https_proxy = try getProxy(allocator, penvs, &.{ "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY" });
 
         if (penvs.get("DEBUGINFOD_TIMEOUT")) |val| {
             const d = try std.fmt.parseInt(isize, val, 10);
@@ -59,7 +66,18 @@ pub const DebuginfodEnvs = struct {
             }
             allocator.free(items);
         }
+        if (self.http_proxy) |val| allocator.free(val);
+        if (self.https_proxy) |val| allocator.free(val);
         self.* = undefined;
+    }
+
+    fn getProxy(allocator: std.mem.Allocator, penvs: std.process.Environ.Map, env_var_names: []const []const u8) !?[]const u8 {
+        for (env_var_names) |name| {
+            const val = penvs.get(name) orelse continue;
+            if (val.len == 0) continue;
+            return try allocator.dupe(u8, val);
+        }
+        return null;
     }
 
     fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !?[]const std.http.Header {
@@ -494,6 +512,21 @@ pub const DebuginfodContext = struct {
             .io = io,
         };
         defer client.deinit();
+
+        // Honor the standard http_proxy / https_proxy env vars (resolved once
+        // in DebuginfodEnvs.init). no_proxy is not handled (std has no support
+        // for it). The arena backs the parsed Proxy structs plus the small env
+        // map that `initDefaultProxies` consumes; both only live for this request.
+        if (self.envs.http_proxy != null or self.envs.https_proxy != null) {
+            var proxy_arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer proxy_arena.deinit();
+            const arena = proxy_arena.allocator();
+
+            var proxy_env = std.process.Environ.Map.init(arena);
+            if (self.envs.http_proxy) |val| try proxy_env.put("http_proxy", val);
+            if (self.envs.https_proxy) |val| try proxy_env.put("https_proxy", val);
+            try client.initDefaultProxies(arena, &proxy_env);
+        }
 
         const redirect_buffer: []u8 = try client.allocator.alloc(u8, 8 * 1024);
         defer client.allocator.free(redirect_buffer);
