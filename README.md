@@ -43,10 +43,12 @@ LD_PRELOAD=./result/lib/libdebuginfod.so /usr/bin/gdb
 - DEBUGINFOD_PROGRESS
 - DEBUGINFOD_HEADERS_FILE
 - DEBUGINFOD_TIMEOUT
+- http_proxy / https_proxy (also all_proxy)
 
 ## ENV's not-implemented:
 - DEBUGINFOD_IMA_CERT_PATH (hard?)
 - DEBUGINFOD_RETRY_LIMIT
+- no_proxy (proxy bypass list)
 
 ## What is missing:
 - missing func debuginfod_find_metadata
