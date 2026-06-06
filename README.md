@@ -52,8 +52,11 @@ LD_PRELOAD=./result/lib/libdebuginfod.so /usr/bin/gdb
 
 ## Caching:
 - positive results cached under `<cache>/<buildid>/<kind>` (tmp file + atomic rename)
-- negative (404) results cached as a 0-byte marker file, re-queried after `cache_miss_s`
+- negative (404/501) results cached as a 0-byte marker file, re-queried after `cache_miss_s`
   seconds (default 600, read from `<cache>/cache_miss_s` if present) — like GNU debuginfod
+- `find_source` extra short-circuits (no per-file network query): if `debuginfo` for the
+  build-id is negatively cached (no debuginfo ⇒ no source), or a `501` marked the build-id's
+  source unsupported (`<cache>/<buildid>/source-unsupported`)
 
 ## What is missing:
 - missing func debuginfod_find_metadata
