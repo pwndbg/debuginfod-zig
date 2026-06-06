@@ -68,6 +68,6 @@ stdenv.mkDerivation {
   __darwinAllowLocalNetworking = true;
 
   nativeBuildInputs = [
-    pkgsBuildHost.dev_zig_0_16.hook
+    pkgsBuildHost.dev_zig_0_17.hook
   ];
 }
