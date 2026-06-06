@@ -17,11 +17,11 @@
       forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
       lib = nixpkgs.lib;
 
-      fun_zig_0_16 =
+      fun_zig_0_17 =
         pkgs:
         (
           let
-            dev_zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."master-2025-11-24" // {
+            dev_zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."master-2026-06-04" // {
               meta = {
                 platforms = pkgs.lib.platforms.all;
                 broken = false;
@@ -37,7 +37,7 @@
 
       overlay = (
         final: prev: {
-          dev_zig_0_16 = (fun_zig_0_16 prev);
+          dev_zig_0_17 = (fun_zig_0_17 prev);
           libdebuginfod-zig-static = (
             fun_libdebuginfod prev {
               flags = [ "-Dlinkage=static" ];
@@ -80,7 +80,7 @@
           pkgs = (fun_pkgs system);
         in
         {
-          default = pkgs.dev_zig_0_16;
+          default = pkgs.dev_zig_0_17;
         }
       );
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-tree);
