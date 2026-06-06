@@ -35,7 +35,7 @@ fn debuginfod_find_common(
             local_path = ctx.findDebuginfo(build_id_hex) catch |err| {
                 log.warn("findDebuginfo err: {}", .{err});
                 return switch (err) {
-                    error.FetchStatusNotFound => CErrNoFound,
+                    error.FetchStatusNotFound, error.FetchStatusNotImplemented => CErrNoFound,
                     else => CErrUnknown,
                 };
             };
@@ -44,7 +44,7 @@ fn debuginfod_find_common(
             local_path = ctx.findExecutable(build_id_hex) catch |err| {
                 log.warn("findExecutable err: {}", .{err});
                 return switch (err) {
-                    error.FetchStatusNotFound => CErrNoFound,
+                    error.FetchStatusNotFound, error.FetchStatusNotImplemented => CErrNoFound,
                     else => CErrUnknown,
                 };
             };
@@ -55,7 +55,7 @@ fn debuginfod_find_common(
             local_path = ctx.findSource(build_id_hex, source_path_casted) catch |err| {
                 log.warn("findSource err: {}", .{err});
                 return switch (err) {
-                    error.FetchStatusNotFound => CErrNoFound,
+                    error.FetchStatusNotFound, error.FetchStatusNotImplemented => CErrNoFound,
                     else => CErrUnknown,
                 };
             };
@@ -66,7 +66,7 @@ fn debuginfod_find_common(
             local_path = ctx.findSectionWithFallback(build_id_hex, section_casted) catch |err| {
                 log.warn("findSection err: {}", .{err});
                 return switch (err) {
-                    error.FetchStatusNotFound => CErrNoFound,
+                    error.FetchStatusNotFound, error.FetchStatusNotImplemented => CErrNoFound,
                     else => CErrUnknown,
                 };
             };

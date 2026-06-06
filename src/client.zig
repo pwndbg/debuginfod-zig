@@ -6,7 +6,7 @@ const user_agent = @import("user_agent.zig");
 pub const ProgressFnType = fn (handle: ?*DebuginfodContext, current: c_long, total: c_long) callconv(.c) c_int;
 
 // Default negative-cache TTL (seconds), matching elfutils' cache_miss_default_s.
-const cache_miss_default_s: i64 = 600;
+const cache_miss_default_s: u64 = 600;
 
 pub const DebuginfodEnvs = struct {
     // required
@@ -30,7 +30,7 @@ pub const DebuginfodEnvs = struct {
     // Negative-cache TTL in seconds: a not-found result is remembered (as an
     // empty marker file) for this long before the server is queried again.
     // Mirrors elfutils' cache_miss_s; read from `$cache/cache_miss_s` if present.
-    cache_miss_s: i64 = cache_miss_default_s,
+    cache_miss_s: u64 = cache_miss_default_s,
 
     fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !void {
         self.urls = try getUrls(allocator, penvs);
@@ -92,12 +92,12 @@ pub const DebuginfodEnvs = struct {
     // Read `$cache/cache_miss_s` if present (so users can tune it like elfutils),
     // otherwise fall back to the default. Never fails: any error -> default.
     // Unlike elfutils we do not auto-create the file.
-    fn getCacheMissS(allocator: std.mem.Allocator, io: std.Io, cache_path: []const u8) i64 {
+    fn getCacheMissS(allocator: std.mem.Allocator, io: std.Io, cache_path: []const u8) u64 {
         const path = std.fs.path.join(allocator, &.{ cache_path, "cache_miss_s" }) catch return cache_miss_default_s;
         defer allocator.free(path);
         const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64)) catch return cache_miss_default_s;
         defer allocator.free(data);
-        return std.fmt.parseInt(i64, std.mem.trim(u8, data, " \t\r\n"), 10) catch cache_miss_default_s;
+        return std.fmt.parseInt(u64, std.mem.trim(u8, data, " \t\r\n"), 10) catch cache_miss_default_s;
     }
 
     fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !?[]const std.http.Header {
@@ -330,6 +330,21 @@ pub const DebuginfodContext = struct {
 
     const CacheState = enum { hit, miss };
 
+    // A 0-byte marker still suppresses queries while younger than cache_miss_s.
+    // mtime may be in the future on clock skew -> negative age -> treated fresh.
+    fn isFreshNegative(self: *DebuginfodContext, mtime: std.Io.Timestamp) bool {
+        const now = std.Io.Clock.now(.real, self.getIo());
+        const age_ns = mtime.durationTo(now).nanoseconds;
+        return age_ns <= @as(i96, self.envs.cache_miss_s) * std.time.ns_per_s;
+    }
+
+    // True if `path` is a fresh 0-byte negative marker. Read-only (does not
+    // delete stale markers, unlike `checkCache`).
+    fn freshNegativeMarkerAt(self: *DebuginfodContext, path: []const u8) bool {
+        const st = std.Io.Dir.cwd().statFile(self.getIo(), path, .{}) catch return false;
+        return st.kind == .file and st.size == 0 and self.isFreshNegative(st.mtime);
+    }
+
     // Inspect the cache entry for `local_path`:
     //   - non-empty file        -> .hit (use it)
     //   - empty marker, fresh    -> error.FetchStatusNotFound (negative-cache hit, no network)
@@ -341,13 +356,7 @@ pub const DebuginfodContext = struct {
         const st = std.Io.Dir.cwd().statFile(io, local_path, .{}) catch return .miss;
         if (st.kind != .file) return .miss;
         if (st.size != 0) return .hit;
-
-        const now = std.Io.Clock.now(.real, io);
-        const age_ns = st.mtime.durationTo(now).nanoseconds;
-        const ttl_ns = @as(i96, self.envs.cache_miss_s) * std.time.ns_per_s;
-        if (age_ns <= ttl_ns) {
-            return error.FetchStatusNotFound;
-        }
+        if (self.isFreshNegative(st.mtime)) return error.FetchStatusNotFound;
         std.Io.Dir.deleteFileAbsolute(io, local_path) catch {};
         return .miss;
     }
@@ -408,11 +417,57 @@ pub const DebuginfodContext = struct {
             .miss => {},
         }
 
+        // build_id-level short-circuit (no per-file network): source can only
+        // exist if debuginfo does, and a prior 501 means the whole build_id has
+        // no source. Either marker (fresh) => skip the query entirely.
+        if (self.sourceUnavailableForBuildId(build_id)) {
+            return error.FetchStatusNotFound;
+        }
+
         const url_path = try std.fmt.allocPrint(self.allocator, "/buildid/{s}/source/{s}", .{ build_id, source_path_encoded });
         defer self.allocator.free(url_path);
 
-        try self.fetchFullOptions(url_path, local_path);
+        self.fetchFullOptions(url_path, local_path) catch |err| {
+            // 501 => this build_id doesn't serve source at all; remember that so
+            // subsequent source files for it skip the network.
+            if (err == error.FetchStatusNotImplemented) {
+                self.markSourceUnsupported(build_id) catch {};
+            }
+            return err;
+        };
         return local_path;
+    }
+
+    // Path of the build_id-level "source not supported" marker (set on a 501).
+    fn sourceUnsupportedMarkerPath(self: *DebuginfodContext, build_id: []const u8) ![]u8 {
+        return std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "source-unsupported" });
+    }
+
+    // True if source is known-unavailable for this build_id: either debuginfo is
+    // negatively cached (no debuginfo => no source) or a 501 marked source
+    // unsupported. Read-only.
+    fn sourceUnavailableForBuildId(self: *DebuginfodContext, build_id: []const u8) bool {
+        const debuginfo_path = std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "debuginfo" }) catch return false;
+        defer self.allocator.free(debuginfo_path);
+        if (self.freshNegativeMarkerAt(debuginfo_path)) return true;
+
+        const su_path = self.sourceUnsupportedMarkerPath(build_id) catch return false;
+        defer self.allocator.free(su_path);
+        return self.freshNegativeMarkerAt(su_path);
+    }
+
+    // Write/refresh the build_id-level source-unsupported marker. Truncating
+    // (not O_EXCL) so a stale marker's mtime is refreshed; safe because nothing
+    // ever stores a real artifact at this path.
+    fn markSourceUnsupported(self: *DebuginfodContext, build_id: []const u8) !void {
+        const su_path = try self.sourceUnsupportedMarkerPath(build_id);
+        defer self.allocator.free(su_path);
+
+        const io = self.getIo();
+        const dir = std.fs.path.dirname(su_path) orelse return error.InvalidLocalPath;
+        std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+        var file = try std.Io.Dir.createFileAbsolute(io, su_path, .{ .truncate = true });
+        file.close(io);
     }
 
     pub fn findSection(self: *DebuginfodContext, build_id: []const u8, section: []const u8) ![]u8 {
@@ -467,9 +522,11 @@ pub const DebuginfodContext = struct {
             return;
         }
 
-        // All servers were reachable but returned 404: record a negative-cache
+        // A clean 404 or 501 from the servers is cached as a per-file negative
         // marker so we don't re-query for the next `cache_miss_s` seconds.
-        if (lastErr == error.FetchStatusNotFound) {
+        // 501 is surfaced as-is so findSource can additionally cache it at the
+        // build_id level.
+        if (lastErr == error.FetchStatusNotFound or lastErr == error.FetchStatusNotImplemented) {
             self.writeNegativeMarker(local_path) catch {};
         }
 
@@ -615,6 +672,11 @@ pub const DebuginfodContext = struct {
         if (response.head.status == .not_found) {
             return error.FetchStatusNotFound;
         }
+        // 501: server doesn't implement this artifact kind (e.g. no source). A
+        // distinct error so `findSource` can cache it at the build_id level.
+        if (response.head.status == .not_implemented) {
+            return error.FetchStatusNotImplemented;
+        }
         if (response.head.status != .ok) {
             return error.FetchStatusNotOk;
         }
@@ -720,10 +782,18 @@ fn testHandleConnection(io: std.Io, stream: std.Io.net.Stream, file_blob: []cons
     }
 }
 
+// Sentinel blob that makes the test server reply 501 (kind not implemented).
+const test_blob_not_implemented = "\x00NOTIMPL\x00";
+
 fn testHandleRequest(req: *std.http.Server.Request, file_blob: []const u8) !void {
     // An empty blob simulates a server that does not have the artifact (404).
     if (file_blob.len == 0) {
         try req.respond("not found", .{ .status = .not_found });
+        return;
+    }
+    // The sentinel blob simulates a server that does not implement the kind (501).
+    if (std.mem.eql(u8, file_blob, test_blob_not_implemented)) {
+        try req.respond("not implemented", .{ .status = .not_implemented });
         return;
     }
 
@@ -893,4 +963,177 @@ test "DebuginfodContext negative cache: fresh marker short-circuits without netw
     defer ctx.deinit();
 
     try std.testing.expectError(error.FetchStatusNotFound, ctx.findDebuginfo(build_id));
+}
+
+test "findSource short-circuits when debuginfo is negatively cached" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
+
+    const build_id = "5c9d8b11851246b7766f0a7b3042a8988faad435";
+
+    // Fresh negative debuginfo marker => source can't exist for this build_id.
+    try tmp_dir.dir.createDirPath(io, build_id);
+    const sub = try std.fs.path.join(allocator, &.{ build_id, "debuginfo" });
+    defer allocator.free(sub);
+    var marker_file = try tmp_dir.dir.createFile(io, sub, .{});
+    marker_file.close(io);
+
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try helpers.getEnvMap(allocator);
+        defer penvs.deinit();
+        // Unreachable: a network query would fail with a connection error.
+        try penvs.put("DEBUGINFOD_URLS", "http://127.0.0.1:1");
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
+    defer ctx.deinit();
+
+    try std.testing.expectError(error.FetchStatusNotFound, ctx.findSource(build_id, "/any/file.c"));
+}
+
+test "findSource caches 501 at build_id level and skips later files" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
+
+    const build_id = "5c9d8b11851246b7766f0a7b3042a8988faad435";
+
+    // Phase 1: a server that replies 501 for source -> mark build_id unsupported.
+    {
+        var queue_buf: [1]u16 = undefined;
+        var queue: std.Io.Queue(u16) = .init(&queue_buf);
+        var server = try io.concurrent(testStartServer, .{ io, test_blob_not_implemented, &queue });
+        defer server.cancel(io) catch {};
+        const port = try queue.getOne(io);
+
+        var ctx: *DebuginfodContext = undefined;
+        {
+            var penvs = try helpers.getEnvMap(allocator);
+            defer penvs.deinit();
+            const urls = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{port});
+            defer allocator.free(urls);
+            try penvs.put("DEBUGINFOD_URLS", urls);
+            try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+            ctx = try DebuginfodContext.init(allocator, penvs);
+        }
+        defer ctx.deinit();
+
+        try std.testing.expectError(error.FetchStatusNotImplemented, ctx.findSource(build_id, "/a.c"));
+
+        const marker = try std.fs.path.join(allocator, &.{ tmp_path, build_id, "source-unsupported" });
+        defer allocator.free(marker);
+        const st = try std.Io.Dir.cwd().statFile(io, marker, .{});
+        try std.testing.expectEqual(@as(u64, 0), st.size);
+    }
+
+    // Phase 2: a fresh context with an unreachable URL but the same cache must
+    // short-circuit a *different* source file using the build_id marker (no net).
+    {
+        var ctx: *DebuginfodContext = undefined;
+        {
+            var penvs = try helpers.getEnvMap(allocator);
+            defer penvs.deinit();
+            try penvs.put("DEBUGINFOD_URLS", "http://127.0.0.1:1");
+            try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+            ctx = try DebuginfodContext.init(allocator, penvs);
+        }
+        defer ctx.deinit();
+
+        try std.testing.expectError(error.FetchStatusNotFound, ctx.findSource(build_id, "/b.c"));
+    }
+}
+
+test "cache_miss_s is read from the cache config file" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
+
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "cache_miss_s", .data = "42\n" });
+
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try helpers.getEnvMap(allocator);
+        defer penvs.deinit();
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(@as(u64, 42), ctx.envs.cache_miss_s);
+}
+
+test "stale negative marker is dropped and re-queried (respects cache_miss_s)" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
+
+    const build_id = "5c9d8b11851246b7766f0a7b3042a8988faad435";
+
+    // Empty debuginfo marker, but with an mtime well older than cache_miss_s
+    // (default 600) -> it must be treated as stale, deleted, and re-queried.
+    try tmp_dir.dir.createDirPath(io, build_id);
+    const sub = try std.fs.path.join(allocator, &.{ build_id, "debuginfo" });
+    defer allocator.free(sub);
+    {
+        var marker_file = try tmp_dir.dir.createFile(io, sub, .{});
+        defer marker_file.close(io);
+        const now = std.Io.Clock.now(.real, io);
+        const old_ts: std.Io.Timestamp = .{ .nanoseconds = now.nanoseconds - 1000 * std.time.ns_per_s };
+        try marker_file.setTimestamps(io, .{ .modify_timestamp = .{ .new = old_ts } });
+    }
+
+    var ctx: *DebuginfodContext = undefined;
+    {
+        var penvs = try helpers.getEnvMap(allocator);
+        defer penvs.deinit();
+        // Unreachable: a re-query fails with a connection error, not the cached
+        // ENOENT -> proves the stale marker did not short-circuit.
+        try penvs.put("DEBUGINFOD_URLS", "http://127.0.0.1:1");
+        try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
+        ctx = try DebuginfodContext.init(allocator, penvs);
+    }
+    defer ctx.deinit();
+
+    if (ctx.findDebuginfo(build_id)) |path| {
+        allocator.free(path);
+        return error.TestUnexpectedResult; // should not have found anything
+    } else |err| {
+        try std.testing.expect(err != error.FetchStatusNotFound);
+    }
+
+    // The stale marker was deleted by checkCache; the failed re-query (connection
+    // error, not 404) left no new marker behind.
+    const marker = try std.fs.path.join(allocator, &.{ tmp_path, build_id, "debuginfo" });
+    defer allocator.free(marker);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, marker, .{}));
 }
