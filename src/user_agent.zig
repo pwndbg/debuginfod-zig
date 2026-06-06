@@ -17,13 +17,13 @@ fn parseLinuxOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const 
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
-    var file: ?std.fs.File = null;
+    var file: ?std.Io.File = null;
     for (paths) |path| {
-        file = std.fs.cwd().openFile(path, .{}) catch continue;
+        file = std.Io.Dir.cwd().openFile(io, path, .{}) catch continue;
         break;
     }
     if (file) |f| {
-        defer f.close();
+        defer f.close(io);
 
         var buf: [1024]u8 = undefined;
         var reader = f.reader(io, &buf);
@@ -69,13 +69,13 @@ fn parseMacosOsRelease(allocator: std.mem.Allocator, io: std.Io, paths: []const 
     var output: OsRelease = .{};
     errdefer output.deinit(allocator);
 
-    var file: ?std.fs.File = null;
+    var file: ?std.Io.File = null;
     for (paths) |path| {
-        file = std.fs.cwd().openFile(path, .{}) catch continue;
+        file = std.Io.Dir.cwd().openFile(io, path, .{}) catch continue;
         break;
     }
     if (file) |f| {
-        defer f.close();
+        defer f.close(io);
 
         var buf: [1024]u8 = undefined;
         var reader = f.reader(io, &buf);
@@ -116,7 +116,7 @@ fn getOsRelease(allocator: std.mem.Allocator, io: std.Io) !OsRelease {
 
 test "parseLinuxOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -135,11 +135,11 @@ test "parseLinuxOsRelease parses basic os-release file" {
     ;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(tmp_path);
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "os-release" });
     defer allocator.free(file_path);
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(io, .{
         .data = fake_data,
         .sub_path = "os-release",
     });
@@ -156,7 +156,7 @@ test "parseLinuxOsRelease parses basic os-release file" {
 
 test "parseMacosOsRelease parses basic os-release file" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -184,11 +184,11 @@ test "parseMacosOsRelease parses basic os-release file" {
     ;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(tmp_path);
+    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(io, &tmp_path_buf)];
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "SystemVersion.plist" });
     defer allocator.free(file_path);
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(io, .{
         .data = fake_data,
         .sub_path = "SystemVersion.plist",
     });
@@ -221,7 +221,7 @@ pub fn getUserAgent(allocator: std.mem.Allocator, io: std.Io) ![]u8 {
 
 test "getUserAgent" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 

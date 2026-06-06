@@ -113,9 +113,21 @@ test "urlencode" {
     try std.testing.expectEqualStrings("%2Froot%2Ffoo.c", out);
 }
 
-pub fn fileExists(path: []u8) bool {
-    std.fs.cwd().access(path, .{}) catch {
+pub fn fileExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch {
         return false;
     };
     return true;
+}
+
+// Capture the current process environment into a Map. `std.process.getEnvMap`
+// was removed; the environment is now a capability normally passed to `main`.
+// Since this is a libc-linked shared library (no Zig start), read the global
+// libc `environ` directly.
+pub fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    const c_environ = std.c.environ;
+    var count: usize = 0;
+    while (c_environ[count] != null) : (count += 1) {}
+    const block: std.process.Environ.PosixBlock = .{ .slice = @ptrCast(c_environ[0..count :null]) };
+    return std.process.Environ.createMap(.{ .block = block }, allocator);
 }

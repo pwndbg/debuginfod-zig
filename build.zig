@@ -4,38 +4,17 @@ const manifest = @import("build.zig.zon");
 pub fn generatePkgconfig(b: *std.Build, version: std.SemanticVersion) !*std.Build.Step.InstallFile {
     const allocator = b.allocator;
     const version_str = try std.fmt.allocPrint(allocator, "{d}.{d}", .{ version.major, version.minor });
-    const absolute_prefix = b.install_prefix;
-    if (!std.fs.path.isAbsolute(absolute_prefix)) {
-        @panic("Prefix must be absolute!");
-    }
 
-    var threaded: std.Io.Threaded = .init(allocator);
-    defer threaded.deinit();
-    const io = threaded.io();
+    // The install prefix is no longer known at configure time (the new build
+    // system resolves it during the make/install stage), so the generated
+    // .pc file derives `prefix` from `${pcfiledir}` at use time instead. Here
+    // we only need to substitute @VERSION@.
+    const template = @embedFile("upstream/libdebuginfod.pc.in");
+    const text = try std.mem.replaceOwned(u8, allocator, template, "@VERSION@", version_str);
 
-    const input_file = try std.fs.cwd().openFile("upstream/libdebuginfod.pc.in", .{});
-    defer input_file.close();
-
-    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 0);
-    defer aw.deinit();
-
-    var buf: [0]u8 = undefined;
-    var reader = input_file.reader(io, &buf);
-    _ = try reader.interface.stream(&aw.writer, .unlimited);
-
-    var text = try aw.toOwnedSlice();
-
-    // replace @PREFIX@ and @VERSION@
-    text = try std.mem.replaceOwned(u8, allocator, text, "@PREFIX@", absolute_prefix);
-    text = try std.mem.replaceOwned(u8, allocator, text, "@VERSION@", version_str);
-
-    const tmp_dir = b.makeTempPath();
-    const tmp_file = try std.fs.path.join(allocator, &.{ tmp_dir, "libdebuginfod.pc" });
-    const out_file = try std.fs.cwd().createFile(tmp_file, .{});
-    defer out_file.close();
-    try out_file.writeAll(text);
-
-    return b.addInstallFile(b.path(tmp_file), "lib/pkgconfig/libdebuginfod.pc");
+    const wf = b.addWriteFiles();
+    const pc = wf.add("libdebuginfod.pc", text);
+    return b.addInstallFileWithDir(pc, .prefix, "lib/pkgconfig/libdebuginfod.pc");
 }
 
 pub fn build(b: *std.Build) !void {
