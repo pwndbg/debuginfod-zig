@@ -113,13 +113,6 @@ test "urlencode" {
     try std.testing.expectEqualStrings("%2Froot%2Ffoo.c", out);
 }
 
-pub fn fileExists(io: std.Io, path: []const u8) bool {
-    std.Io.Dir.cwd().access(io, path, .{}) catch {
-        return false;
-    };
-    return true;
-}
-
 // Capture the current process environment into a Map. `std.process.getEnvMap`
 // was removed; the environment is now a capability normally passed to `main`.
 // Since this is a libc-linked shared library (no Zig start), read the global

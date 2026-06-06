@@ -50,9 +50,14 @@ LD_PRELOAD=./result/lib/libdebuginfod.so /usr/bin/gdb
 - DEBUGINFOD_RETRY_LIMIT
 - no_proxy (proxy bypass list)
 
+## Caching:
+- positive results cached under `<cache>/<buildid>/<kind>` (tmp file + atomic rename)
+- negative (404) results cached as a 0-byte marker file, re-queried after `cache_miss_s`
+  seconds (default 600, read from `<cache>/cache_miss_s` if present) — like GNU debuginfod
+
 ## What is missing:
 - missing func debuginfod_find_metadata
-- auto-cleanup old debuginfo files
+- auto-cleanup old debuginfo files (`max_unused_age_s`, `cache_clean_interval_s`)
 - ima policies/verification
 - caching headers as file `/hdr-debuginfo`
 
