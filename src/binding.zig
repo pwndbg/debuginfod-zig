@@ -74,7 +74,7 @@ fn debuginfod_find_common(
     }
     defer ctx.allocator.free(local_path);
 
-    const fd = std.posix.open(local_path, .{
+    const fd = std.posix.openat(std.posix.AT.FDCWD, local_path, .{
         .CLOEXEC = true,
         .ACCMODE = .RDONLY,
     }, 0) catch |err| {
@@ -91,7 +91,7 @@ fn debuginfod_find_common(
 }
 
 export fn debuginfod_begin() ?*client.DebuginfodContext {
-    var penvs = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
+    var penvs = helpers.getEnvMap(std.heap.c_allocator) catch |err| {
         log.warn("debuginfod_begin getEnvMap err: {}", .{err});
         return null;
     };
@@ -227,5 +227,5 @@ export fn debuginfod_set_verbose_fd(
 ) void {
     const ctx = handle orelse return;
     _ = ctx;
-    log.setLogFile(.{ .handle = fd });
+    log.setLogFile(.{ .handle = fd, .flags = .{ .nonblocking = false } });
 }

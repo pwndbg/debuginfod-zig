@@ -1,42 +1,24 @@
 const std = @import("std");
 
 const default_log_level = std.log.Level.info;
-var logwriter_mutex = std.Thread.Mutex.Recursive.init;
+// `std.Thread.Mutex` was removed; use the lock-free `std.atomic.Mutex`
+// (tryLock/unlock) with a short spin. Contention is rare and held only for a
+// single format+write.
+var logwriter_mutex: std.atomic.Mutex = .unlocked;
 var logwriter_was_inited = false;
 
-const log_writer: *std.Io.Writer = &log_file_writer.interface;
-var log_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = .{ .handle = -1 },
-    .mode = .streaming,
-};
+fn lockMutex() void {
+    while (!logwriter_mutex.tryLock()) {}
+}
 
-pub fn setLogFile(file: ?std.fs.File) void {
-    logwriter_mutex.lock();
+// Logging target fd (-1 == disabled).
+var log_fd: std.posix.fd_t = -1;
+
+pub fn setLogFile(file: ?std.Io.File) void {
+    lockMutex();
     defer logwriter_mutex.unlock();
 
-    if (file) |filen| {
-        log_file_writer.file = filen;
-    } else {
-        log_file_writer.file = .{ .handle = -1 };
-    }
-}
-
-fn lockLogWriter(buffer: []u8) ?*std.Io.Writer {
-    if (log_file_writer.file.handle == -1) {
-        return null;
-    }
-    logwriter_mutex.lock();
-    log_writer.flush() catch {};
-    log_writer.buffer = buffer;
-    return log_writer;
-}
-
-fn unlockLogWriter() void {
-    log_writer.flush() catch {};
-    log_writer.end = 0;
-    log_writer.buffer = &.{};
-    logwriter_mutex.unlock();
+    log_fd = if (file) |f| f.handle else -1;
 }
 
 fn log(
@@ -48,20 +30,35 @@ fn log(
     if (@intFromEnum(message_level) > @intFromEnum(default_log_level)) {
         return;
     }
+
+    lockMutex();
+    defer logwriter_mutex.unlock();
+
     if (!logwriter_was_inited) {
         logwriter_was_inited = true;
-        if (std.posix.getenv("DEBUGINFOD_VERBOSE") != null) {
-            setLogFile(.stderr());
+        if (std.c.getenv("DEBUGINFOD_VERBOSE") != null) {
+            log_fd = std.Io.File.stderr().handle;
         }
     }
-
-    var buffer: [64]u8 = undefined;
-    if (lockLogWriter(&buffer)) |stderr| {
-        defer unlockLogWriter();
-        const level_txt = comptime message_level.asText();
-        const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
-        nosuspend stderr.print(level_txt ++ prefix2 ++ format ++ "\n", args) catch return;
+    if (log_fd == -1) {
+        return;
     }
+
+    // Mirror std.log's defaultLog: format into a small buffer-backed file
+    // writer and flush before returning. `std.Options.debug_io` provides an
+    // `Io` usable from logging contexts that don't otherwise have one (the
+    // target fd may be a pipe/terminal, so use streaming mode). Locking keeps
+    // concurrent log lines from interleaving.
+    const io = std.Options.debug_io;
+    const file: std.Io.File = .{ .handle = log_fd, .flags = .{ .nonblocking = false } };
+    var buffer: [256]u8 = undefined;
+    var file_writer = file.writerStreaming(io, &buffer);
+    const writer = &file_writer.interface;
+
+    const level_txt = comptime message_level.asText();
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+    nosuspend writer.print(level_txt ++ prefix2 ++ format ++ "\n", args) catch return;
+    writer.flush() catch {};
 }
 
 fn scoped(comptime scope: @EnumLiteral()) type {

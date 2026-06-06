@@ -19,7 +19,7 @@ pub const DebuginfodEnvs = struct {
     fetch_progress_to_stderr: bool = false,
     fetch_headers: ?[]const std.http.Header = null,
 
-    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.EnvMap) !void {
+    fn init(self: *DebuginfodEnvs, allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !void {
         self.urls = try getUrls(allocator, penvs);
         self.cache_path = try getCachePath(allocator, penvs);
         self.user_agent = try user_agent.getUserAgent(allocator, io);
@@ -62,15 +62,15 @@ pub const DebuginfodEnvs = struct {
         self.* = undefined;
     }
 
-    fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.EnvMap) !?[]const std.http.Header {
+    fn getHeadersFromFile(allocator: std.mem.Allocator, io: std.Io, penvs: std.process.Environ.Map) !?[]const std.http.Header {
         const headers_file = penvs.get("DEBUGINFOD_HEADERS_FILE") orelse {
             return null;
         };
-        var file = std.fs.cwd().openFile(headers_file, .{}) catch |err| {
+        var file = std.Io.Dir.cwd().openFile(io, headers_file, .{}) catch |err| {
             log.warn("getHeadersFromFile openFile,err: {}", .{err});
             return null;
         };
-        defer file.close();
+        defer file.close(io);
 
         var buf: [8192]u8 = undefined;
         var reader = file.reader(io, &buf);
@@ -101,13 +101,13 @@ pub const DebuginfodEnvs = struct {
         return try list.toOwnedSlice(allocator);
     }
 
-    // fn getImaCert(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !void {
+    // fn getImaCert(allocator: std.mem.Allocator, penvs: std.process.Environ.Map) !void {
     //     _ = allocator;
     //     // const env8 = penvs.get("DEBUGINFOD_IMA_CERT_PATH");
     //     // TODO: implement
     // }
 
-    fn getUrls(allocator: std.mem.Allocator, penvs: std.process.EnvMap) ![][]const u8 {
+    fn getUrls(allocator: std.mem.Allocator, penvs: std.process.Environ.Map) ![][]const u8 {
         var list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         if (penvs.get("DEBUGINFOD_URLS")) |val| {
             // Split by spaces
@@ -126,7 +126,7 @@ pub const DebuginfodEnvs = struct {
         return try list.toOwnedSlice(allocator);
     }
 
-    fn getCachePath(allocator: std.mem.Allocator, penvs: std.process.EnvMap) ![]const u8 {
+    fn getCachePath(allocator: std.mem.Allocator, penvs: std.process.Environ.Map) ![]const u8 {
         if (penvs.get("DEBUGINFOD_CACHE_PATH")) |cache_path| {
             return try std.fs.path.join(allocator, &.{cache_path});
         }
@@ -144,11 +144,11 @@ pub const DebuginfodEnvs = struct {
 
 test "DebuginfodEnvs" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    var penvs = try std.process.getEnvMap(allocator);
+    var penvs = try helpers.getEnvMap(allocator);
     defer penvs.deinit();
 
     try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1.com http://test2.com invalidbar");
@@ -225,6 +225,9 @@ pub const DebuginfodResponeHeaders = struct {
 
 pub const DebuginfodContext = struct {
     allocator: std.mem.Allocator,
+    // Owned, long-lived Io for this context. Its address must be stable, which
+    // it is because the context is heap-allocated.
+    threaded: std.Io.Threaded,
     current_request_headers: std.array_list.Aligned(std.http.Header, null),
 
     envs: DebuginfodEnvs = .{},
@@ -236,19 +239,22 @@ pub const DebuginfodContext = struct {
     current_response_headers: ?*DebuginfodResponeHeaders = null,
     // end variables safe accessable only in `onFetchProgress`
 
-    pub fn init(allocator: std.mem.Allocator, penvs: std.process.EnvMap) !*DebuginfodContext {
+    pub fn getIo(self: *DebuginfodContext) std.Io {
+        return self.threaded.io();
+    }
+
+    pub fn init(allocator: std.mem.Allocator, penvs: std.process.Environ.Map) !*DebuginfodContext {
         const ctx = try allocator.create(DebuginfodContext);
         errdefer allocator.destroy(ctx);
 
-        var threaded: std.Io.Threaded = .init(allocator);
-        defer threaded.deinit();
-        const io = threaded.io();
-
         ctx.* = .{
             .allocator = allocator,
+            .threaded = .init(allocator, .{}),
             .current_request_headers = try std.ArrayList(std.http.Header).initCapacity(allocator, 0),
         };
-        try ctx.envs.init(allocator, io, penvs);
+        errdefer ctx.threaded.deinit();
+
+        try ctx.envs.init(allocator, ctx.getIo(), penvs);
 
         if (ctx.envs.fetch_headers) |headers| {
             for (headers) |header| {
@@ -268,6 +274,7 @@ pub const DebuginfodContext = struct {
         }
         self.current_request_headers.deinit(allocator);
 
+        self.threaded.deinit();
         allocator.destroy(self);
     }
 
@@ -289,7 +296,7 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "debuginfo" });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(local_path)) {
+        if (helpers.fileExists(self.getIo(), local_path)) {
             return local_path;
         }
 
@@ -306,7 +313,7 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, "executable" });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(local_path)) {
+        if (helpers.fileExists(self.getIo(), local_path)) {
             return local_path;
         }
 
@@ -332,7 +339,7 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, cache_part });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(local_path)) {
+        if (helpers.fileExists(self.getIo(), local_path)) {
             return local_path;
         }
 
@@ -355,7 +362,7 @@ pub const DebuginfodContext = struct {
         const local_path = try std.fs.path.join(self.allocator, &.{ self.envs.cache_path, build_id, cache_part });
         errdefer self.allocator.free(local_path); // caller must free
 
-        if (helpers.fileExists(local_path)) {
+        if (helpers.fileExists(self.getIo(), local_path)) {
             return local_path;
         }
 
@@ -401,25 +408,23 @@ pub const DebuginfodContext = struct {
         self.current_url = url;
         defer self.current_url = null;
 
+        const io = self.getIo();
+
         const local_dirname = std.fs.path.dirname(local_path) orelse return error.InvalidLocalPath;
         const local_path_tmp = try getTempFilepath(self.allocator, local_path);
         defer self.allocator.free(local_path_tmp);
 
-        try std.fs.cwd().makePath(local_dirname);
+        try std.Io.Dir.cwd().createDirPath(io, local_dirname);
 
-        errdefer std.fs.deleteFileAbsolute(local_path_tmp) catch {};
+        errdefer std.Io.Dir.deleteFileAbsolute(io, local_path_tmp) catch {};
         {
-            var file = try std.fs.createFileAbsolute(local_path_tmp, .{
+            var file = try std.Io.Dir.createFileAbsolute(io, local_path_tmp, .{
                 .truncate = true,
             });
-            defer file.close();
+            defer file.close(io);
 
             var buffer: [64 * 1024]u8 = undefined;
-            var writer = file.writer(&buffer);
-
-            var threaded: std.Io.Threaded = .init(self.allocator);
-            defer threaded.deinit();
-            const io = threaded.io();
+            var writer = file.writer(io, &buffer);
 
             var writed_bytes: std.atomic.Value(usize) = .init(0);
             var total_bytes: std.atomic.Value(usize) = .init(0);
@@ -432,17 +437,17 @@ pub const DebuginfodContext = struct {
             try ffetch.await(io);
         }
 
-        try std.fs.renameAbsolute(local_path_tmp, local_path);
+        try std.Io.Dir.renameAbsolute(local_path_tmp, local_path, io);
     }
 
     fn loopProgress(self: *DebuginfodContext, io: std.Io, url: [:0]const u8, writed_bytes: *std.atomic.Value(usize), total_bytes: *std.atomic.Value(usize), fetch_finished: *std.atomic.Value(bool)) anyerror!void {
         const show_progress_stderr = self.progress_fn == null and self.envs.fetch_progress_to_stderr;
-        const fetch_start_at = try std.time.Instant.now();
+        const fetch_start_at = std.Io.Clock.now(.awake, io);
 
         var progress: std.Progress.Node = undefined;
         var progress_count_one = false;
         if (show_progress_stderr) {
-            progress = std.Progress.start(.{
+            progress = std.Progress.start(io, .{
                 .root_name = url,
             });
         }
@@ -451,8 +456,8 @@ pub const DebuginfodContext = struct {
         while (!fetch_finished.load(.acquire)) {
             const current_writed_bytes = writed_bytes.load(.acquire);
             const current_total_bytes = total_bytes.load(.acquire);
-            const loop_at = try std.time.Instant.now();
-            const diff = loop_at.since(fetch_start_at) / std.time.ns_per_s;
+            const loop_at = std.Io.Clock.now(.awake, io);
+            const diff: u64 = @intCast(@divFloor(fetch_start_at.durationTo(loop_at).nanoseconds, std.time.ns_per_s));
 
             if (self.envs.fetch_timeout != null and current_writed_bytes < 100_000 and diff > self.envs.fetch_timeout.?) {
                 return error.DownloadTimeoutExceed;
@@ -640,12 +645,12 @@ test "DebuginfodContext no exists servers" {
 
     var ctx: *DebuginfodContext = undefined;
     {
-        var penvs = try std.process.getEnvMap(allocator);
+        var penvs = try helpers.getEnvMap(allocator);
         defer penvs.deinit();
         try penvs.put("DEBUGINFOD_URLS", "invalidfoo https://test1-notexist http://test2-notexist invalidbar");
 
-        const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
-        defer allocator.free(tmp_path);
+        var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(std.testing.io, &tmp_path_buf)];
         try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
 
         ctx = try DebuginfodContext.init(allocator, penvs);
@@ -668,7 +673,7 @@ test "DebuginfodContext real server" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var threaded: std.Io.Threaded = .init(allocator);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -683,15 +688,15 @@ test "DebuginfodContext real server" {
 
     var ctx: *DebuginfodContext = undefined;
     {
-        var penvs = try std.process.getEnvMap(allocator);
+        var penvs = try helpers.getEnvMap(allocator);
         defer penvs.deinit();
 
         const DEBUGINFOD_URLS = try std.fmt.allocPrint(allocator, "invalidfoo https://test1-notexist http://test2-notexist http://127.0.0.1:{d} invalidbar", .{port});
         defer allocator.free(DEBUGINFOD_URLS);
         try penvs.put("DEBUGINFOD_URLS", DEBUGINFOD_URLS);
 
-        const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
-        defer allocator.free(tmp_path);
+        var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const tmp_path = tmp_path_buf[0..try tmp_dir.dir.realPath(std.testing.io, &tmp_path_buf)];
         try penvs.put("DEBUGINFOD_CACHE_PATH", tmp_path);
 
         ctx = try DebuginfodContext.init(allocator, penvs);
@@ -703,11 +708,8 @@ test "DebuginfodContext real server" {
     const filepath = try ctx.findDebuginfo("5c9d8b11851246b7766f0a7b3042a8988faad435");
     defer allocator.free(filepath);
 
-    const debugfile = try std.fs.cwd().openFile(filepath, .{});
-    defer debugfile.close();
+    const content = try std.Io.Dir.cwd().readFileAlloc(io, filepath, allocator, .unlimited);
+    defer allocator.free(content);
 
-    var buf: [1024]u8 = undefined;
-    const n = try debugfile.read(&buf);
-
-    try std.testing.expectEqualStrings(contentInFile, buf[0..n]);
+    try std.testing.expectEqualStrings(contentInFile, content);
 }
