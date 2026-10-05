@@ -19,8 +19,8 @@ pub fn readBuildIdHex(allocator: std.mem.Allocator, io: std.Io, path: []const u8
 
     var ph_it = header.iterateProgramHeaders(&reader);
     while (try ph_it.next()) |phdr| {
-        if (phdr.p_type != std.elf.PT_NOTE) continue;
-        if (try findInNoteRange(allocator, &reader, header.endian, phdr.p_offset, phdr.p_filesz)) |hex| {
+        if (phdr.type != .NOTE) continue;
+        if (try findInNoteRange(allocator, &reader, header.endian, phdr.offset, phdr.filesz)) |hex| {
             return hex;
         }
     }
@@ -201,7 +201,7 @@ fn buildSyntheticElf64(allocator: std.mem.Allocator, endian: std.builtin.Endian,
         .e_shoff = if (via == .section) table_off else 0,
         .e_flags = 0,
         .e_ehsize = ehdr_size,
-        .e_phentsize = @sizeOf(std.elf.Elf64_Phdr),
+        .e_phentsize = @sizeOf(std.elf.Elf64.Phdr),
         .e_phnum = if (via == .segment) 1 else 0,
         .e_shentsize = shdr_size,
         .e_shnum = if (via == .section) 2 else 0,
@@ -216,15 +216,15 @@ fn buildSyntheticElf64(allocator: std.mem.Allocator, endian: std.builtin.Endian,
     try w.splatByteAll(0, @intCast(table_off - out.written().len));
 
     if (via == .segment) {
-        try w.writeStruct(std.elf.Elf64_Phdr{
-            .p_type = std.elf.PT_NOTE,
-            .p_flags = 0,
-            .p_offset = note_off,
-            .p_vaddr = 0,
-            .p_paddr = 0,
-            .p_filesz = note_bytes.len,
-            .p_memsz = note_bytes.len,
-            .p_align = 4,
+        try w.writeStruct(std.elf.Elf64.Phdr{
+            .type = .NOTE,
+            .flags = .{},
+            .offset = note_off,
+            .vaddr = 0,
+            .paddr = 0,
+            .filesz = note_bytes.len,
+            .memsz = note_bytes.len,
+            .@"align" = 4,
         }, endian);
         return out.toOwnedSlice();
     }
