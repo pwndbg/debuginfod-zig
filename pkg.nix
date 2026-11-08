@@ -27,7 +27,7 @@ let
     else if stdenv.targetPlatform.isLinux then
       "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}${abiVersion}"
     else if stdenv.targetPlatform.isDarwin then
-      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-macos.${stdenv.targetPlatform.darwinSdkVersion}"
+      "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-macos.${stdenv.targetPlatform.darwinMinVersion}"
     else
       (throw "not supported target");
 in
