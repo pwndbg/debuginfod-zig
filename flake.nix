@@ -3,6 +3,8 @@
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
+    # nixpkgs 26.11 dropped x86_64-darwin; 26.05 still supports it
+    nixpkgs-x86_64-darwin.url = "https://channels.nixos.org/nixpkgs-26.05-darwin/nixexprs.tar.xz";
     zig.url = "github:mitchellh/zig-overlay";
   };
 
@@ -10,11 +12,15 @@
     inputs@{
       self,
       nixpkgs,
+      nixpkgs-x86_64-darwin,
       zig,
       ...
     }:
     let
-      forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
+      forAllSystems = nixpkgs.lib.genAttrs (
+        lib.unique (nixpkgs.lib.systems.flakeExposed ++ [ "x86_64-darwin" ])
+      );
+      nixpkgsFor = system: if system == "x86_64-darwin" then nixpkgs-x86_64-darwin else nixpkgs;
       lib = nixpkgs.lib;
 
       fun_zig_0_17 =
@@ -75,7 +81,7 @@
 
       fun_pkgs =
         system:
-        import nixpkgs {
+        import (nixpkgsFor system) {
           inherit system;
           overlays = [
             overlay
@@ -105,6 +111,6 @@
           default = pkgs.dev_zig_0_17;
         }
       );
-      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-tree);
+      formatter = forAllSystems (system: (nixpkgsFor system).legacyPackages.${system}.nixfmt-tree);
     };
 }
