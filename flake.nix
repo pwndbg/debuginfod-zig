@@ -2,9 +2,9 @@
   description = "debuginfo-zig";
 
   inputs = {
-    nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
+    nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst";
     # nixpkgs 26.11 dropped x86_64-darwin; 26.05 still supports it
-    nixpkgs-x86_64-darwin.url = "https://channels.nixos.org/nixpkgs-26.05-darwin/nixexprs.tar.xz";
+    nixpkgs-x86_64-darwin.url = "https://channels.nixos.org/nixpkgs-26.05-darwin/nixexprs.tar.zst";
     zig.url = "github:mitchellh/zig-overlay";
   };
 
