@@ -48,8 +48,10 @@ stdenv.mkDerivation {
 
   postInstall =
     let
+      # glibc executables need the loader (zig sets /lib/ld-linux-*, missing in the sandbox);
+      # zig links musl executables statically by default, so they run directly.
       ld =
-        if stdenv.targetPlatform.isLinux then
+        if stdenv.targetPlatform.isLinux && !stdenv.targetPlatform.isMusl then
           "$(echo ${targetPackages.stdenv.cc.bintools.dynamicLinker})"
         else
           "";

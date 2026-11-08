@@ -2,7 +2,7 @@
   description = "debuginfo-zig";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
     zig.url = "github:mitchellh/zig-overlay";
   };
 
@@ -21,14 +21,35 @@
         pkgs:
         (
           let
-            dev_zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."0.17.0" // {
-              meta = {
-                platforms = pkgs.lib.platforms.all;
-                broken = false;
-                maintainers = [ ];
-              };
+            meta = {
+              platforms = pkgs.lib.platforms.all;
+              broken = false;
+              maintainers = [ ];
             };
-            dev_zig_hook = pkgs.zig.hook.override { zig = dev_zig; };
+            zig_bin = zig.packages.${pkgs.stdenv.hostPlatform.system}."0.17.1";
+            dev_zig = zig_bin // {
+              inherit meta;
+            };
+            dev_zig_hook =
+              if pkgs.zig.hook ? override then
+                # nixpkgs <= 25.11: separate makeSetupHook package
+                pkgs.zig.hook.override { zig = dev_zig; }
+              else
+                # nixpkgs >= 26.05: the hook is zig's own setupHook (zig.hook = zig);
+                # zig-overlay sets dontFixup, so install it by hand
+                zig_bin.overrideAttrs (old: {
+                  inherit meta;
+                  inherit (pkgs.zig)
+                    setupHook
+                    zig_default_cpu_flag
+                    zig_default_optimize_flag
+                    propagatedNativeBuildInputs
+                    ;
+                  installPhase = old.installPhase + ''
+                    mkdir -p $out/nix-support
+                    substituteAll "$setupHook" $out/nix-support/setup-hook
+                  '';
+                });
           in
           dev_zig // { hook = dev_zig_hook; }
         );
@@ -37,7 +58,8 @@
 
       overlay = (
         final: prev: {
-          dev_zig_0_17 = (fun_zig_0_17 prev);
+          # nixpkgs' own zig 0.17 once it has one, else the prebuilt one from zig-overlay
+          dev_zig_0_17 = if prev ? zig_0_17 then prev.zig_0_17 else fun_zig_0_17 prev;
           libdebuginfod-zig-static = (
             fun_libdebuginfod prev {
               flags = [ "-Dlinkage=static" ];
