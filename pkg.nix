@@ -22,7 +22,8 @@ let
       (throw "not supported abi version ${stdenv.targetPlatform.parsed.abi.name}");
 
   zigTarget =
-    if stdenv.targetPlatform.isLinux && stdenv.targetPlatform.is32bit then
+    # zig names 32-bit x86/arm by family (`x86`, `arm`); others (e.g. `mipsel`) by cpu name
+    if stdenv.targetPlatform.isLinux && (stdenv.targetPlatform.isx86_32 || stdenv.targetPlatform.isAarch32) then
       "-Dtarget=${stdenv.targetPlatform.parsed.cpu.family}-linux-${stdenv.targetPlatform.parsed.abi.name}${abiVersion}"
     else if stdenv.targetPlatform.isLinux then
       "-Dtarget=${stdenv.targetPlatform.parsed.cpu.name}-linux-${stdenv.targetPlatform.parsed.abi.name}${abiVersion}"
